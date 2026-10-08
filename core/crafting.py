@@ -107,8 +107,8 @@ class CraftingSkill:
         move = self._next_move(self.target['item'], 1, inventory)
         if move is None:
             # цель достигнута — учебная программа сама перейдёт к следующей
+            # (ступени отмечаются в next_goal, поддержка повторяется вечно).
             print(f"✅ Сделано: {self.target['name']}")
-            self.curriculum.mark_done(self.target['id'])
             self.crafted_count += 1
             self.target = None
             return None

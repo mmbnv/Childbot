@@ -15,7 +15,8 @@ import time
 MOCK_GATHER = {
     'oak_log': ['log'], 'birch_log': ['log'], 'stone': ['stone'],
     'cobblestone': ['stone'], 'coal': ['coal_ore'], 'raw_iron': ['iron_ore'],
-    'wheat': ['wheat'], 'white_wool': ['sheep'],
+    'wheat': ['wheat'], 'white_wool': ['sheep'], 'string': ['spider', 'cobweb'],
+    'flint': ['gravel'], 'feather': ['chicken'],
 }
 MOCK_CRAFT = {
     'oak_planks': {'oak_log': 1}, 'birch_planks': {'birch_log': 1},
@@ -28,9 +29,12 @@ MOCK_CRAFT = {
     'iron_pickaxe': {'iron_ingot': 3, 'stick': 2},
     'iron_sword': {'iron_ingot': 2, 'stick': 1},
     'iron_helmet': {'iron_ingot': 5}, 'iron_chestplate': {'iron_ingot': 8},
+    'iron_leggings': {'iron_ingot': 7}, 'iron_boots': {'iron_ingot': 4},
     'torch': {'coal': 1, 'stick': 1}, 'bread': {'wheat': 3},
     'wooden_door': {'oak_planks': 6}, 'chest': {'oak_planks': 8},
     'bed': {'oak_planks': 3, 'white_wool': 3},
+    'bucket': {'iron_ingot': 3}, 'bow': {'stick': 3, 'string': 3},
+    'arrow': {'flint': 1, 'stick': 1, 'feather': 1},
 }
 
 

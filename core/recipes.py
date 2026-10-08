@@ -65,6 +65,14 @@ RECIPES = {
     'chest':           {'kind': 'craft', 'need': {'oak_planks': 8}, 'table': True, 'yield': 1},
     'bed':             {'kind': 'craft', 'need': {'oak_planks': 3, 'white_wool': 3}, 'table': True, 'yield': 1},
     'white_wool':      {'kind': 'gather', 'from': ['white_wool', 'sheep'], 'need': {}},
+
+    # --- охота и лук ---
+    'bucket':          {'kind': 'craft', 'need': {'iron_ingot': 3}, 'table': True, 'yield': 1},
+    'string':          {'kind': 'gather', 'from': ['spider', 'cobweb'], 'need': {}},
+    'bow':             {'kind': 'craft', 'need': {'stick': 3, 'string': 3}, 'table': True, 'yield': 1},
+    'flint':           {'kind': 'gather', 'from': ['gravel'], 'need': {}},
+    'feather':         {'kind': 'gather', 'from': ['chicken'], 'need': {}},
+    'arrow':           {'kind': 'craft', 'need': {'flint': 1, 'stick': 1, 'feather': 1}, 'table': True, 'yield': 4},
 }
 
 

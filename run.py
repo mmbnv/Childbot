@@ -70,6 +70,7 @@ def main():
             brain.predictor.save_periodic()
             brain.episodic.save()
             brain.self_model.save()
+            brain.curriculum.save()
             save_counter = 0
 
         if brain.step % 20 == 0:

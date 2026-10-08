@@ -63,7 +63,7 @@ rec = Recipes(file=tempfile.mktemp(suffix='.json'))
 cur = Curriculum(rec, file=tempfile.mktemp(suffix='.json'))
 sk = CraftingSkill(rec, cur, a.action, max_depth=12)
 
-for i in range(400):
+for i in range(900):
     inv = a.get_self()['inventory']
     sk.tick(inv)
     if cur.all_done():
@@ -74,11 +74,18 @@ assert a.inventory.get('stone_pickaxe', 0) >= 1, a.inventory
 assert a.inventory.get('crafting_table', 0) >= 1, a.inventory
 assert a.inventory.get('iron_pickaxe', 0) >= 1, a.inventory
 assert a.inventory.get('bed', 0) >= 1, a.inventory
+assert a.inventory.get('bow', 0) >= 1, a.inventory
 print("crafting skill: OK -> выучил", cur.progress(), "| инвентарь:",
       {k: v for k, v in a.inventory.items() if v})
-# программа из 22 ступеней пройдена целиком: от дерева до железной брони
+# вся программа пройдена целиком: от дерева до лука
 assert cur.all_done(), cur.progress()
-assert len(cur.done) == 22, cur.done
+assert len(cur.done) == len(cur.steps), cur.done
+
+# бесконечный режим: после программы существо поддерживает снаряжение
+inv = [{'name': 'iron_pickaxe', 'count': 1}]
+goal = cur.next_goal(inv)
+assert goal is not None and goal['id'].startswith('keep_'), goal
+print("endless upkeep: OK ->", goal['name'])
 
 
 print("\nCRAFTING/CURRICULUM TESTS PASSED")

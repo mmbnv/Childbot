@@ -42,7 +42,18 @@ STEPS = [
     ('chest',    'chest',          'сделать сундук',           'верстак + доски'),
     ('wool',     'white_wool',     'добыть шерсть',            'охота/стрижка'),
     ('bed',      'bed',            'сделать кровать',          'верстак + шерсть'),
+    ('leggings', 'iron_leggings',  'сделать железные штаны',   'верстак + железо'),
+    ('boots',    'iron_boots',     'сделать железные ботинки', 'верстак + железо'),
+    ('bucket',   'bucket',         'сделать ведро',            'верстак + железо'),
+    ('string',   'string',         'добыть нити',              'паук'),
+    ('bow',      'bow',            'сделать лук',              'палки + нити'),
+    ('arrow',    'arrow',          'сделать стрелы',           'кремень + перо'),
 ]
+
+# Бесконечная программа: после ступеней существо поддерживает снаряжение
+# и запасы — всегда есть чему учиться и что улучшать.
+UPKEEP = ['iron_pickaxe', 'iron_sword', 'iron_chestplate', 'iron_helmet',
+          'torch', 'bread', 'stone_pickaxe', 'stone_axe']
 
 
 class Curriculum:
@@ -89,13 +100,18 @@ class Curriculum:
         return {'id': sid, 'item': item, 'name': name, 'need': need}
 
     def progress(self):
-        return f"{len(self.done)}/{len(self.steps)}"
+        ids = {s[0] for s in self.steps}
+        learned = sum(1 for d in self.done if d in ids)
+        return f"{learned}/{len(self.steps)}"
 
     def next_goal(self, inventory):
         """Какую вещь делать прямо сейчас. Возвращает dict или None.
 
         Если текущая ступень уже достигнута (предмет есть в инвентаре) —
-        отмечает её пройденной и переходит к следующей.
+        отмечает её пройденной и переходит к следующей. Когда все ступени
+        пройдены, начинается бесконечный режим: существо поддерживает
+        снаряжение (инструменты, броню, свет) и запасы еды — всегда есть
+        чему учиться и что улучшать.
         """
         while not self.all_done():
             sid, item, name, need = self.steps[self.current]
@@ -110,7 +126,30 @@ class Curriculum:
             return {'id': sid, 'item': item, 'name': name, 'need': need,
                     'craft': self.recipes.is_craft(item),
                     'base': self.recipes.base_ingredients(item)}
+        return self._upkeep_goal(inventory)
+
+    def _upkeep_goal(self, inventory):
+        """Бесконечная программа: поддерживать снаряжение и запасы."""
+        for want in UPKEEP:
+            have = self._count(inventory, want)
+            if have < 2:
+                return {'id': f'keep_{want}', 'item': want,
+                        'name': f'запас: {want} ({have}/2)', 'need': 'бесконечный рост',
+                        'craft': self.recipes.is_craft(want),
+                        'base': self.recipes.base_ingredients(want)}
         return None
+
+    @staticmethod
+    def _count(inventory, item):
+        total = 0
+        for i in inventory:
+            n = i.get('name', '')
+            if n == item or item in n:
+                total += i.get('count', 0)
+        return total
+
+    def ids(self):
+        return {s[0] for s in self.steps}
 
     def mark_done(self, sid):
         if sid not in self.done:
