@@ -219,5 +219,7 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 node_modules/
-data/
+# состояние существа — рантайм; в git только описание папки
+data/*
+!data/README.md
 .agent_tmp/
