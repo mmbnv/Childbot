@@ -105,6 +105,9 @@ class SelfModel:
             self.add_narrative(f"у меня появился папа — {name}")
 
     def add_narrative(self, event):
+        # Не засоряем автобиографию повторами одного и того же события.
+        if self.narrative and self.narrative[-1]['event'] == event:
+            return
         self.narrative.append({'event': event, 'time': time.time()})
         if len(self.narrative) > 50:
             self.narrative.pop(0)

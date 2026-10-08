@@ -1,7 +1,11 @@
 """
 GoalManager — удержание цели, поставленной извне (папой).
 """
+import json
+import os
 import time
+
+MAX_HISTORY = 100
 
 
 class Goal:
@@ -32,10 +36,35 @@ class GoalManager:
         self.file = file
         self.current = None
         self.history = []
+        self.load()
+
+    def load(self):
+        if not os.path.exists(self.file):
+            return
+        try:
+            with open(self.file, 'r', encoding='utf-8') as f:
+                self.history = json.load(f).get('history', [])[-MAX_HISTORY:]
+        except Exception:
+            pass
+
+    def save(self):
+        os.makedirs(os.path.dirname(self.file), exist_ok=True)
+        try:
+            with open(self.file, 'w', encoding='utf-8') as f:
+                json.dump({'history': self.history[-MAX_HISTORY:]},
+                          f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    def _remember(self, goal_dict):
+        self.history.append(goal_dict)
+        if len(self.history) > MAX_HISTORY:
+            self.history = self.history[-MAX_HISTORY:]
+        self.save()
 
     def set_goal(self, description, action, params=None, max_attempts=5):
         if self.current:
-            self.history.append(self.current.to_dict())
+            self._remember(self.current.to_dict())
         self.current = Goal(description, action, params, max_attempts)
         print(f"🎯 Цель: {description[:50]} → {action}")
 
@@ -50,7 +79,7 @@ class GoalManager:
             return
         self.current.completed = success
         self.current.last_result = result
-        self.history.append(self.current.to_dict())
+        self._remember(self.current.to_dict())
         print(f"   {'✅' if success else '❌'} Цель {'выполнена' if success else 'провалена'}")
         self.current = None
 
@@ -58,6 +87,6 @@ class GoalManager:
         if not self.current:
             return
         self.current.last_result = {'reason': 'gave_up'}
-        self.history.append(self.current.to_dict())
+        self._remember(self.current.to_dict())
         print(f"   ❌ Сдаюсь (попыток: {self.current.attempts})")
         self.current = None

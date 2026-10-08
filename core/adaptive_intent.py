@@ -15,6 +15,9 @@ LEARNED_FILE = "data/learned_intents.json"
 OLLAMA_URL = "http://localhost:11434/api/generate"
 OLLAMA_MODEL = "qwen2.5:3b"
 
+# LLM иногда возвращает пример из промпта целиком ("<фраза ребёнка>").
+PLACEHOLDER = re.compile(r'[<{][^<>{}]{0,60}[>}]')
+
 
 HINTS = {
     'go_to_player': ['подойди', 'ко мне', 'иди сюда', 'за мной', 'следуй'],
@@ -49,6 +52,10 @@ CHATTER_MARKERS = [
     'молодец', 'спасибо', 'класс', 'супер', 'ого', 'вау', 'круто',
     'как дела', 'что ты', 'ты кто', 'это кто', 'хватит',
     'что можешь', 'что умеешь', 'почему', 'зачем',
+    # приветствия — это разговор, а не команда: иначе «привет! я тут»
+    # превращается в цель и бот бесконечно идёт к папе.
+    'привет', 'здравствуй', 'хай', 'доброе утро', 'добрый день',
+    'добрый вечер', 'как ты', 'что делаешь',
 ]
 
 
@@ -129,6 +136,19 @@ class AdaptiveIntent:
             return None, None, say, 'llm_none'
         return None, None, None, 'none'
 
+    def _clean_say(self, say):
+        """Отбросить примеры из промпта и слишком длинные/английские ответы."""
+        if not say or not isinstance(say, str):
+            return None
+        say = PLACEHOLDER.sub('', say).strip().strip('"\'').strip()
+        if not say:
+            return None
+        if len(re.findall(r'[a-zA-Z]{3,}', say)) >= 2:
+            return None
+        if len(say) > 150:
+            say = say[:150]
+        return say or None
+
     def _ask_llm(self, user_text, context):
         actions_list = self.catalog.describe_for_prompt()
         hint = self._hint_for(user_text)
@@ -159,7 +179,7 @@ class AdaptiveIntent:
             if r.status_code != 200:
                 return None, None, None
             data = json.loads(r.json().get('response', '').strip())
-            return data.get('action'), data.get('params'), data.get('say')
+            return data.get('action'), data.get('params'), self._clean_say(data.get('say'))
         except Exception as e:
             print(f"AdaptiveIntent LLM ошибка: {e}")
             return None, None, None

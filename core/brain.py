@@ -469,9 +469,10 @@ class Brain:
             self.cortex.act('escape_pit')
             return True
 
-        # 0b. Стою в плохой клетке — надо уйти из неё, а не топтаться на месте
+        # 0b. Стою в плохой клетке — надо уйти из неё, а не топтаться на месте.
+        # Плохая = чёрный список (застревание) или известная опасность (боль).
         cell = self.cell_of(state)
-        if self.memory.is_blacklisted(cell):
+        if self.memory.is_blacklisted(cell) or self.memory.is_dangerous(cell):
             self.self_dig_guard = 12
             if p and p.get('distance', 999) < 40:
                 self.cortex.act('go_to_player')
