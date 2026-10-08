@@ -699,7 +699,11 @@ async function handleAction(action, text, params) {
     }
 
     case 'dig_nearby': {
-      const blocks = nearbyBlocks(4).filter(b => b.diggable);
+      const feet = bot.entity.position.floored();
+      // Никогда не копаем блок под собственными ногами — иначе падаем
+      // в яму, которую сами же вырыли.
+      const blocks = nearbyBlocks(4).filter(b => b.diggable &&
+        !(b.x === feet.x && b.z === feet.z && b.y === feet.y - 1));
       if (blocks.length === 0) return { ok: false, reason: 'no_diggable_block' };
       const target = blocks[0];
       try {

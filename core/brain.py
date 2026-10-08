@@ -100,6 +100,11 @@ class Brain:
         self.panic_mode = False
         self.panic_until = 0
 
+        # Последнее отправленное действие и защита от самоокапывания
+        self.last_action = None
+        self.last_escape_time = 0.0
+        self.self_dig_guard = 0   # сколько шагов держим запрет на копку под собой
+
         self.sleeping = False
         self.sleep_until = 0
 
@@ -448,13 +453,33 @@ class Brain:
                 self.cortex.act('force_break_out')
                 return True
 
+        # 0. Застрял в яме (по данным тела) — выбираемся, не давая себя закопать
+        if state.get('in_pit'):
+            self.self_dig_guard = 12
+            now = time.time()
+            if now - self.last_escape_time > 3:
+                print("🕳️  Я в яме — выбираюсь")
+                self.last_escape_time = now
+            self.cortex.act('escape_pit')
+            return True
+
+        # 0b. Стою в плохой клетке — надо уйти из неё, а не топтаться на месте
+        cell = self.cell_of(state)
+        if self.memory.is_blacklisted(cell):
+            self.self_dig_guard = 12
+            if p and p.get('distance', 999) < 40:
+                self.cortex.act('go_to_player')
+            else:
+                self.cortex.act('step_forward')
+            return True
+
         # 1. Есть план?
         if self.cognition.last_plan:
             self._execute_plan()
             return True
 
         # 2. Планирование (мысленная симуляция) при напряжении
-        if tension > 1.2:
+        if tension > 1.8:
             plan = self.cognition.plan_if_needed(self.drives, state, self.predictor)
             if plan:
                 print(f"📋 Новый план: {[s['action'] for s in plan]}")
@@ -470,7 +495,11 @@ class Brain:
             return True
 
         # 4. Обычный выбор (мысленная примерка + уверенность)
-        action = self.cortex.choose_action(state)
+        # Запрещаем копать под собой, пока не убедились, что мы не в яме.
+        forbid = {'dig_down', 'dig_nearby'} if self.self_dig_guard > 0 else set()
+        if self.self_dig_guard > 0:
+            self.self_dig_guard -= 1
+        action = self.cortex.choose_action(state, forbid=forbid)
         if self.step % 5 == 0:
             dominant = self.drives.dominant()
             print(f"🧠 Напряжение {tension:.2f} (главное: {dominant}) → {action}")
@@ -512,7 +541,20 @@ class Brain:
 
     # ============ СТУПОР ============
 
+    MOVEMENT_ACTIONS = {
+        'step_forward', 'step_back', 'step_left', 'step_right',
+        'jump_forward', 'sprint_short', 'go_to_player',
+        'walk_away_from_player', 'come_close_to_player',
+        'find_and_attack', 'flee_from_hostile', 'attack_hostile',
+        'go_to_position', 'dig_forward', 'dig_tree', 'escape_pit',
+        'force_break_out',
+    }
+
     def check_stuck(self, state):
+        """Застревание = пытались двигаться, но не сдвинулись.
+
+        Копание/осмотр/ожидание позицию не меняют — это не застревание.
+        """
         p = state.get('player')
         if p and p['distance'] < 5:
             self.stuck_steps = 0
@@ -523,10 +565,11 @@ class Brain:
             self.last_positions.pop(0)
         if len(self.last_positions) < 20:
             return False
+        tried_to_move = self.cortex.last_action in self.MOVEMENT_ACTIONS
         xs = [q[0] for q in self.last_positions]
         zs = [q[1] for q in self.last_positions]
         spread = (max(xs) - min(xs)) + (max(zs) - min(zs))
-        if spread < 1.5:
+        if tried_to_move and spread < 1.5:
             self.stuck_steps += 1
         else:
             self.stuck_steps = 0
@@ -590,7 +633,13 @@ class Brain:
 
         if self.escape_mode > 0:
             self.escape_mode -= 1
-            self.cortex.act('escape_pit')
+            self.self_dig_guard = 12
+            # Если мы реально в яме — выбираемся; если нет, пробиваем выход.
+            # (escape_pit вне ямы — пустышка, поэтому раньше существо «стояло».)
+            if state.get('in_pit'):
+                self.cortex.act('escape_pit')
+            else:
+                self.cortex.act('force_break_out')
             return 'escape'
 
         # Эмоция из состояния тела

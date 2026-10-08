@@ -69,3 +69,6 @@ class Memory:
     def blacklist(self, cell):
         self.blacklisted_cells.add(cell)
         print(f"🚫 Клетка {cell} в чёрном списке")
+
+    def is_blacklisted(self, cell):
+        return cell in self.blacklisted_cells
