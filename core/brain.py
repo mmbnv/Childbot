@@ -438,7 +438,12 @@ class Brain:
         tension = self.drives.tension()
         still_for = time.time() - self.last_pos_change_time
 
-        if tension > 3.0 and still_for > 25 and not self.panic_mode:
+        # Паника только если мы ПЫТАЛИСЬ двигаться и не смогли. Стоять
+        # неподвижно во время боя, копки, еды или сна — это нормально,
+        # и пробивать себе выход тогда не нужно.
+        tried_to_move = self.cortex.last_action in self.MOVEMENT_ACTIONS
+        if (tension > 3.0 and still_for > 25 and tried_to_move
+                and not self.panic_mode):
             print(f"🚨 ПАНИКА! Стою {still_for:.0f} сек при напряжении {tension:.2f}")
             self.panic_mode = True
             self.panic_until = time.time() + 20
@@ -449,7 +454,8 @@ class Brain:
                 self.last_pos_change_time = time.time()
                 print("✅ Паника прошла")
             else:
-                print("🚨 FORCE BREAK OUT!")
+                if self.step % 5 == 0:
+                    print("🚨 FORCE BREAK OUT!")
                 self.cortex.act('force_break_out')
                 return True
 
