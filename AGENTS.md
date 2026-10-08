@@ -73,9 +73,18 @@ adapters/game2.py        второе тело (подземелье) — док
   `DRIVE_WEIGHTS['comfort'] = 0` — comfort исключён из оценки напряжения.
 - **API адаптера** — единственный контракт между мозгом и телом:
   `get_state / get_self / get_vision / get_sounds / get_world / get_messages /
-  get_player_actions / get_actions / clear_messages / action / say`.
-  `actions.py`, `self_model.py`, `world_model.py` работают через него, а не
-  напрямую через HTTP — иначе mock-тело не заработает.
+  get_player_actions / get_actions / get_tasks / get_game / clear_messages /
+  action / say`. `actions.py`, `self_model.py`, `world_model.py` работают через
+  него, а не напрямую через HTTP — иначе mock-тело не заработает.
+- **Задачи игры — не то же, что учебная программа.** `TaskTracker`
+  (`core/tasks.py`) спрашивает у тела `get_tasks()`: чего хочет сама игра
+  (достижения/квесты). Это имеет приоритет над своим планом роста, но
+  подчиняется драйвам: голод и опасность важнее любой задачи.
+- **Понятия — из признаков, а не из имён.** `core/concepts.py` выводит законы
+  (гравитация, опора, проход, соединение, ...) из `extract_features()`
+  (есть ли опора, сдвинулся ли, открылось ли), поэтому они переносятся в любую
+  игру. `Cortex.choose_action` учитывает `ConceptLearner.advice()`: закон
+  может запретить действие (`forbid`) или поднять его ценность.
 - **Все моторные команды идут через `cortex.act()`**, чтобы обучение
   (сравнение ожидания и реальности) охватывало каждое действие.
   `CraftingSkill` получает `cortex.act` как функцию `act` — ремесло не в обход.

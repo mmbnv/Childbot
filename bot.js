@@ -539,6 +539,20 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify({ actions: ALL_ACTIONS })); return;
   }
 
+  // Задачи, которые ставит сама игра (достижения Minecraft). Мозг не должен
+  // знать их заранее — он просто спрашивает «чего хочет игра?».
+  if (req.url === '/tasks' && req.method === 'GET') {
+    res.end(JSON.stringify({ tasks: gameTasks() })); return;
+  }
+
+  if (req.url === '/game' && req.method === 'GET') {
+    res.end(JSON.stringify({
+      name: 'minecraft',
+      actions: ALL_ACTIONS.map(a => a.name)
+    }));
+    return;
+  }
+
   if (req.url === '/action' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => body += chunk);
@@ -595,6 +609,8 @@ const ALL_ACTIONS = [
   { name: 'spin_around',   desc: 'повернуться на 360' },
   { name: 'stop',          desc: 'остановиться' },
   { name: 'interact',      desc: 'нажать на блок (params.name)' },
+  { name: 'use',           desc: 'использовать блок (дверь, кнопка): params.name' },
+  { name: 'combine',       desc: 'соединить вещества в предмет (params.name)' },
   { name: 'wait_1sec',     desc: 'ждать 1 секунду' },
   { name: 'mimic_last',    desc: 'повторить последнее действие папы' },
   { name: 'look_at_position', desc: 'посмотреть в точку params.x,y,z' },
@@ -604,6 +620,30 @@ const ALL_ACTIONS = [
   { name: 'place_table',   desc: 'поставить верстак рядом с собой' },
   { name: 'smelt',         desc: 'переплавить предмет в печи (params.name)' }
 ];
+
+// --- ЗАДАЧИ ИГРЫ ---
+
+// Достижения Minecraft как задачи, которые игра ставит перед игроком.
+// Существо не знает их заранее — оно спрашивает «чего хочет игра?» и делает.
+function gameTasks() {
+  const has = (name) => bot.inventory.items().some(i => i.name === name || i.name.includes(name));
+  const tasks = [
+    { id: 'mc_log', name: 'добыть дерево', target: 'oak_log', count: 1,
+      need: 'рубить дерево', action: 'gather' },
+    { id: 'mc_table', name: 'сделать верстак', target: 'crafting_table', count: 1,
+      need: 'верстак', action: 'craft' },
+    { id: 'mc_pick', name: 'сделать деревянную кирку', target: 'wooden_pickaxe',
+      count: 1, need: 'верстак', action: 'craft' },
+    { id: 'mc_stone', name: 'добыть камень', target: 'cobblestone', count: 1,
+      need: 'кирка', action: 'gather' },
+    { id: 'mc_spick', name: 'сделать каменную кирку', target: 'stone_pickaxe',
+      count: 1, need: 'верстак', action: 'craft' },
+    { id: 'mc_iron', name: 'добыть железо', target: 'raw_iron', count: 1,
+      need: 'каменная кирка', action: 'gather' },
+  ];
+  for (const t of tasks) t.done = has(t.target);
+  return tasks;
+}
 
 // --- КРАФТ И РЕМЕСЛО ---
 
@@ -1101,6 +1141,21 @@ async function handleAction(action, text, params) {
     case 'interact': {
       const blockName = params && params.name ? params.name : null;
       return await interactWithBlock(blockName);
+    }
+
+    // Понятие «проход»: нажать на интерактивный блок (дверь, кнопка, рычаг),
+    // чтобы он открылся и пропустил дальше.
+    case 'use': {
+      const wanted = (params && params.name) ? params.name : 'door';
+      return await interactWithBlock(wanted);
+    }
+
+    // Понятие «соединение»: свести два вещества в одно (в Minecraft это
+    // крафт). params.name — что должно получиться.
+    case 'combine': {
+      const name = (params && (params.name || params.result)) || null;
+      if (!name) return { ok: false, reason: 'no_item_name' };
+      return await craftItem(name, (params && params.count) || 1);
     }
 
     case 'wait_1sec':

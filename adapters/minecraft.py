@@ -63,6 +63,20 @@ class MinecraftAdapter:
             return []
         return data.get("actions", [])
 
+    def get_tasks(self):
+        """Что игра ставит перед существом (квесты, достижения)."""
+        data = self._get("/tasks")
+        if not data:
+            return []
+        return data.get("tasks", [])
+
+    def get_game(self):
+        """Кто эта игра: имя и доступные действия."""
+        data = self._get("/game")
+        if not data:
+            return {'name': 'minecraft'}
+        return data
+
     def clear_messages(self):
         try:
             requests.post(f"{self.url}/messages/clear", timeout=self.timeout)
