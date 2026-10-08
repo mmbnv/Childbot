@@ -14,13 +14,15 @@ import time
 
 
 class CraftingSkill:
-    def __init__(self, recipes, curriculum, act, max_depth=12):
+    def __init__(self, recipes, curriculum, act, max_depth=12, task_failure_cb=None):
         # act(action, params) — моторный выход. В мозге это cortex.act, чтобы
         # каждое ремесленное действие тоже обучало предсказание.
         self.act = act
         self.recipes = recipes
         self.curriculum = curriculum
         self.max_depth = max_depth
+        # Если не осилили задачу игры — сообщить об этом трекеру задач.
+        self.task_failure_cb = task_failure_cb
 
         self.target = None
         self.table_placed = False
@@ -88,21 +90,35 @@ class CraftingSkill:
 
     # ---------- ШАГ ----------
 
-    def tick(self, inventory):
+    def tick(self, inventory, goal_override=None):
         """Сделать один шаг к текущей цели. Вернуть описание шага или None.
 
         inventory — список {'name','count'} из self_model.
+        goal_override — задача от игры (если есть): её выполняем в первую
+        очередь, а учебная программа ждёт. Так существо может пройти игру,
+        которую никто ему не объяснял.
         """
         if time.time() < self.cooldown_until:
             return None
 
-        if self.target is None:
+        # Новая задача игры заменяет текущую цель; своя программа — только
+        # когда игра молчит.
+        if goal_override and (self.target is None
+                              or self.target.get('id') != goal_override.get('id')):
+            self.target = goal_override
+            self.fails = 0
+            print(f"🎓 Учусь: {goal_override['name']} ({goal_override.get('item')})")
+        elif self.target is None:
             goal = self.curriculum.next_goal(inventory)
             if not goal:
                 return None
             self.target = goal
             self.fails = 0
             print(f"🎓 Учусь: {goal['name']} ({goal['item']})")
+
+        # Задача-действие (не рецепт): просто выполняем то, что просит игра.
+        if self.target.get('kind') == 'do':
+            return self._do_task()
 
         move = self._next_move(self.target['item'], 1, inventory)
         if move is None:
@@ -118,7 +134,20 @@ class CraftingSkill:
         result = self.act(action, params=params)
         r = (result or {}).get('result', {}) if isinstance(result, dict) else {}
         self.last_result = r
+        return self._handle_result(action, params, r)
 
+    def _do_task(self):
+        """Выполнить задачу-действие от игры (дверь, соединение, поиск)."""
+        action = self.target.get('action') or 'look_around'
+        params = self.target.get('params')
+        self.last_action = action
+        result = self.act(action, params=params)
+        r = (result or {}).get('result', {}) if isinstance(result, dict) else {}
+        self.last_result = r
+        return self._handle_result(action, params, r)
+
+    def _handle_result(self, action, params, r):
+        params = params or {}
         if r.get('ok'):
             self.fails = 0
             if action == 'place_table':
@@ -137,7 +166,10 @@ class CraftingSkill:
         if self.fails <= 3:
             print(f"⚠️  Крафт-шаг не удался: {action} {params} ({reason})")
         if self.fails >= 6:
-            self.curriculum.note_failure()
+            if self.target.get('from_task') and self.task_failure_cb:
+                self.task_failure_cb()
+            else:
+                self.curriculum.note_failure()
             print(f"⏭️  Пропускаю {self.target['item']} ({reason}) — вернусь позже")
             self.target = None
             self.fails = 0

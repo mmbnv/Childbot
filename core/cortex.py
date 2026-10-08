@@ -30,11 +30,14 @@ ACTION_POOL = [
     'attack_nearest', 'find_and_attack',
     'flee_from_hostile', 'attack_hostile',
     'look_up', 'look_down', 'spin_around',
+    # проход и соединение — фундаментальные умения, доступные и вне ремесла
+    'use', 'interact',
 ]
 
 
 class Cortex:
-    def __init__(self, adapter, drives, neuromod, predictor, self_model, world_model, catalog):
+    def __init__(self, adapter, drives, neuromod, predictor, self_model, world_model,
+                 catalog, advisor=None):
         self.adapter = adapter
         self.drives = drives
         self.neuromod = neuromod
@@ -42,6 +45,10 @@ class Cortex:
         self.self_model = self_model
         self.world_model = world_model
         self.catalog = catalog
+        # advisor(features, action) -> (bonus, forbid): подсказка от понятий
+        # о мире (гравитация, дверь, опасность...). Мозг устанавливает её после
+        # создания ConceptLearner.
+        self.advisor = advisor
 
         self.pending_action = None
         self.pending_drives_before = None
@@ -49,10 +56,19 @@ class Cortex:
         self.pending_prediction = None
         self.pending_time = 0
         self.last_action = None
+        self.last_result = None
         self._recent_actions = []
 
     def snapshot_drives(self):
         return self.drives.to_dict()
+
+    def _features(self, state):
+        """Признаки мира для понятий (без импорта-цикла на уровне модуля)."""
+        try:
+            from core.concepts import extract_features
+            return extract_features(state, getattr(self.self_model, '__dict__', {}))
+        except Exception:
+            return {}
 
     def _snapshot_context(self):
         try:
@@ -75,6 +91,7 @@ class Cortex:
             return 'stay_here'
 
         # Оценка: предсказанный прирост облегчения + уверенность + любопытство
+        feats = self._features(state)
         scored = []
         exploration = self.neuromod.exploration()
         for a in candidates:
@@ -82,7 +99,16 @@ class Cortex:
             conf = self.self_model.confidence(a)
             novelty_bonus = exploration * 0.15 * (1.0 - conf)
             noise = exploration * 0.1 * (0.5 - random.random())
-            scored.append((a, relief + conf * 0.1 + novelty_bonus + noise))
+            law_bonus = 0.0
+            if self.advisor is not None:
+                try:
+                    bonus, forbid = self.advisor(feats, a)
+                    if forbid:
+                        continue
+                    law_bonus = bonus
+                except Exception:
+                    law_bonus = 0.0
+            scored.append((a, relief + conf * 0.1 + novelty_bonus + law_bonus + noise))
 
         scored.sort(key=lambda x: -x[1])
         top_n = min(3, len(scored))
@@ -101,7 +127,15 @@ class Cortex:
             action, self.pending_drives_before, self.pending_context)
         self.pending_time = time.time()
 
-        return self.adapter.action(action, params=params)
+        result = self.adapter.action(action, params=params)
+        # Исход последнего действия — для обучения понятий о мире.
+        if isinstance(result, dict):
+            inner = result.get('result') if isinstance(result.get('result'), dict) else result
+            self.last_result = {'ok': bool(inner.get('ok', True)),
+                                'reason': str(inner.get('reason', '') or '')}
+        else:
+            self.last_result = None
+        return result
 
     def observe(self):
         """Сравнить ожидание и реальность, обучить предсказание (дофамин)."""

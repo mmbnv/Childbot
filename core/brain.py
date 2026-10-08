@@ -45,6 +45,9 @@ from core.cortex import Cortex
 from core.recipes import Recipes
 from core.curriculum import Curriculum
 from core.crafting import CraftingSkill
+from core.concepts import ConceptLearner, extract_features
+from core.experiment import Experimenter
+from core.tasks import TaskTracker
 from core.cognition import Cognition
 from core.global_workspace import GlobalWorkspace
 from core.working_memory import WorkingMemory
@@ -86,7 +89,20 @@ class Brain:
         # Ремесло: рецепты → учебная программа → умение доводить вещь до конца
         self.recipes = Recipes()
         self.curriculum = Curriculum(self.recipes)
-        self.crafting = CraftingSkill(self.recipes, self.curriculum, self.cortex.act)
+
+        # Фундаментальные понятия о мире (гравитация, опора, дверь, химия,
+        # инструмент, опасность...). Учатся из каждого действия — это то, что
+        # делает разум универсальным, а не «знающим Minecraft».
+        self.concepts = ConceptLearner()
+        self.experimenter = Experimenter(self.concepts)
+        # Задачи, которые ставит игра (любая). Ребёнок может пройти её сам.
+        self.tasks = TaskTracker(self.recipes)
+        self.crafting = CraftingSkill(self.recipes, self.curriculum, self.cortex.act,
+                                      task_failure_cb=self.tasks.note_failure)
+        # Понятия о мире подсказывают выбор действия (что ценно, что запрещено).
+        self.cortex.advisor = self.concepts.advice
+        self._last_features = None
+        self._pending_law = None
 
         # Новая «человеческая» надстройка
         self.workspace = GlobalWorkspace()
@@ -426,6 +442,33 @@ class Brain:
 
         return self.workspace.compete(self.neuromod)
 
+    # ============ ПОНЯТИЯ (законы мира) ============
+
+    def _observe_concepts(self, state):
+        """Сравнить «было → стало» и обновить понятия о мире.
+
+        Это обучение нижнего уровня: не «что делать», а «как устроен мир».
+        Работает для любой игры, потому что опирается на признаки, а не на
+        конкретные блоки.
+        """
+        after = extract_features(state, self.self_model.__dict__)
+        if self._last_features is not None and self.cortex.last_action:
+            action = self.cortex.last_action
+            self.concepts.observe(self._last_features, after, action,
+                                  self.cortex.last_result)
+            if self._pending_law:
+                self.experimenter.observe(
+                    self._pending_law, self.concepts.confidence(self._pending_law) > 0.5)
+                self._pending_law = None
+        self._last_features = after
+
+    # ============ ЗАДАЧИ ИГРЫ ============
+
+    def _game_task_goal(self, state):
+        """Взять у игры задачу и превратить её в цель для ремесла."""
+        self.tasks.poll(self.adapter, self.self_model.inventory)
+        return self.tasks.next_goal(self.self_model.inventory)
+
     # ============ АВТОНОМНОЕ ПОВЕДЕНИЕ ============
 
     def _autonomous_step(self, state):
@@ -504,7 +547,10 @@ class Brain:
                      and d_now['hunger'] < 0.65 and self.drives.pain < 0.6)
         if can_learn:
             self.self_model.refresh()
-            step = self.crafting.tick(self.self_model.inventory)
+            # Сначала — задача, которую ставит игра: так существо может пройти
+            # игру самостоятельно, а не только свою учебную программу.
+            task_goal = self._game_task_goal(state)
+            step = self.crafting.tick(self.self_model.inventory, goal_override=task_goal)
             if step:
                 self.wm.plan_step = f"ремесло: {step['action']} {step.get('params', {})}"
                 # Инвентарь изменился — читаем сразу, иначе следующий шаг
@@ -516,6 +562,19 @@ class Brain:
                         f"я сделал {step['params'].get('name')}", "craft",
                         feeling='гордость', result='ok', valence=0.6, importance=0.6)
                 return True
+
+        # 2b. Любопытный опыт: проверить неизвестный закон мира (безопасно).
+        # Это то, что делает существо исследователем, а не исполнителем.
+        if can_learn:
+            feats = extract_features(state, self.self_model.__dict__)
+            probe = self.experimenter.maybe_probe(feats, time.time())
+            if probe:
+                action, params, law, why = probe
+                if self.catalog.has(action):
+                    print(f"🔬 Опыт: {why} (проверяю закон '{law}')")
+                    self._pending_law = law
+                    self.cortex.act(action, params=params)
+                    return True
 
         # 3. Планирование (мысленная симуляция) при напряжении
         if tension > 1.8:
@@ -577,6 +636,7 @@ class Brain:
         self.self_model.save()
         self.cognition.save()
         self.memory.save()
+        self.concepts.save()
 
     # ============ СТУПОР ============
 
@@ -637,6 +697,8 @@ class Brain:
         is_new = self.memory.add_cell(cell)
         self.drives.tick(state, is_new)
         self.cortex.observe()
+        # Понятия о мире: сравнить «было → стало» после прошлого действия.
+        self._observe_concepts(state)
         self._check_messages(state)
 
         p = state.get('player')

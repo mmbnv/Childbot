@@ -13,6 +13,8 @@ MODULES = [
     'tests.test_survival',
     'tests.test_speech',
     'tests.test_crafting',
+    'tests.test_concepts',
+    'tests.test_games',
 ]
 
 failed = 0

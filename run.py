@@ -14,6 +14,10 @@ from core.brain import Brain
 
 
 def build_adapter(use_mock):
+    if '--game2' in sys.argv:
+        from adapters.game2 import Game2Adapter
+        print("🏰 Другая игра (подземелье) — проверяем универсальность")
+        return Game2Adapter()
     if use_mock:
         from adapters.mock import MockAdapter
         print("🧪 Искусственное тело (mock)")
@@ -40,6 +44,8 @@ def main():
     print("💚 Создатель:", brain.self_model.creator or brain.memory.creator_name)
     print("🎓 Программа развития:", brain.curriculum.summary())
     print("🧰 Ремесло:", brain.recipes.summary())
+    print("🌍 Понятия о мире:", brain.concepts.summary())
+    print("🎯 Задачи игры:", brain.tasks.summary())
 
     save_counter = 0
     max_steps = None
@@ -71,6 +77,7 @@ def main():
             brain.episodic.save()
             brain.self_model.save()
             brain.curriculum.save()
+            brain.concepts.save()
             save_counter = 0
 
         if brain.step % 20 == 0:
@@ -96,6 +103,8 @@ def main():
             print(f"   👁  {brain.workspace.summary()}")
             print(f"   🧩 {brain.wm.summary()}")
             print(f"   🎓 {brain.curriculum.summary()} | {brain.crafting.summary()}")
+            print(f"   🌍 {brain.concepts.summary()}")
+            print(f"   🎯 {brain.tasks.summary()} | 🔬 {brain.experimenter.summary()}")
 
         if max_steps and brain.step >= max_steps:
             print(f"✅ Достигнут лимит шагов ({max_steps})")

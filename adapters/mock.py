@@ -57,6 +57,32 @@ class MockAdapter:
         self.inventory = {}          # name -> count (растёт от добычи и крафта)
         self.world_blocks = ['log', 'stone', 'coal_ore', 'iron_ore', 'sheep', 'wheat']
 
+        # --- фундаментальная физика мира (для понятий) ---
+        self.on_ground = True        # стою на твёрдом
+        self.support_below = True    # подо мной твёрдый блок
+        self.blocked = False         # прошлое движение упёрлось в стену
+        self.door_open = False       # открыта ли ближняя дверь
+        self.near_door = True        # дверь рядом (мир даёт шанс её открыть)
+        self.tasks = self._default_tasks()
+
+    @staticmethod
+    def _default_tasks():
+        """Задачи, которые «игра» ставит перед существом."""
+        return [
+            {'id': 't_wood', 'name': 'добыть дерево', 'target': 'oak_log', 'count': 1,
+             'need': 'рубить дерево', 'done': False},
+            {'id': 't_table', 'name': 'сделать верстак', 'target': 'crafting_table', 'count': 1,
+             'need': 'доски', 'done': False},
+            {'id': 't_pick', 'name': 'сделать деревянную кирку', 'target': 'wooden_pickaxe',
+             'count': 1, 'need': 'верстак', 'done': False},
+            {'id': 't_stone', 'name': 'добыть камень', 'target': 'cobblestone', 'count': 3,
+             'need': 'кирка', 'done': False},
+            {'id': 't_spick', 'name': 'сделать каменную кирку', 'target': 'stone_pickaxe',
+             'count': 1, 'need': 'верстак + камень', 'done': False},
+            {'id': 't_iron', 'name': 'добыть железо', 'target': 'raw_iron', 'count': 1,
+             'need': 'каменная кирка', 'done': False},
+        ]
+
     # ---- сенсоры ----
     def get_state(self):
         self.t += 1
@@ -93,7 +119,20 @@ class MockAdapter:
             'nearest_hostile': self.hostile,
             'recent_damage': (time.time() * 1000 - self._last_damage) < 2500,
             'damage_time': self._last_damage,
+            # физика и проход (для понятий)
+            'on_ground': self.on_ground,
+            'support_below': self.support_below,
+            'blocked': self.blocked,
+            'near_door': self.near_door,
+            'door_open': self.door_open,
         }
+
+    def get_tasks(self):
+        """Что игра ставит перед существом."""
+        return self.tasks
+
+    def get_game(self):
+        return {'name': 'mock-sandbox', 'actions': [a['name'] for a in self.get_actions()]}
 
     def get_self(self):
         inv = [{'name': n, 'count': c, 'slot': i}
@@ -151,7 +190,8 @@ class MockAdapter:
             ('flee_from_hostile', 'убежать'), ('attack_hostile', 'атаковать врага'),
             ('look_up', 'посмотреть вверх'), ('look_down', 'посмотреть вниз'),
             ('spin_around', 'повернуться'), ('stop', 'остановиться'),
-            ('interact', 'взаимодействовать'), ('wait_1sec', 'ждать'),
+            ('interact', 'взаимодействовать'), ('use', 'открыть/использовать (дверь)'),
+            ('combine', 'соединить вещества'), ('wait_1sec', 'ждать'),
             ('mimic_last', 'повторить за папой'), ('look_at_position', 'посмотреть в точку'),
             ('go_to_position', 'идти к точке'),
         ]
@@ -167,19 +207,42 @@ class MockAdapter:
     def action(self, action, params=None):
         self._actions_seen.append(action)
         params = params or {}
-        # движение
-        if action in ('step_forward', 'go_to_player', 'come_close_to_player'):
-            self.x += random.uniform(0.5, 1.5)
-            self.z += random.uniform(-0.5, 0.5)
-        elif action in ('step_back', 'walk_away_from_player'):
-            self.x -= random.uniform(0.5, 1.5)
-        elif action == 'step_left':
-            self.z += 1.0
-        elif action == 'step_right':
-            self.z -= 1.0
-        elif action == 'go_to_position':
-            self.x += random.uniform(-1, 1)
-            self.z += random.uniform(-1, 1)
+        # физика: прыжок поднимает и возвращает на опору
+        if action in ('jump_once', 'jump_forward'):
+            if self.support_below:
+                self.y += 1.0
+                self.on_ground = False
+                self.y -= 1.0            # приземлился обратно
+                self.on_ground = True
+            return {'ok': True, 'result': {'ok': True}}
+        # копать под собой без опоры — падаю (гравитация)
+        if action in ('dig_down', 'dig_nearby') and not self.support_below:
+            self.y -= 1.0
+            self.on_ground = False
+            return {'ok': True, 'result': {'ok': True, 'fell': True}}
+        # открыть дверь — проход
+        if action in ('use', 'interact') and self.near_door:
+            self.door_open = True
+            self.x += 1.0
+            return {'ok': True, 'result': {'ok': True, 'opened': 'door'}}
+        # движение: упёрся в стену — не сдвинусь
+        if action in ('step_forward', 'go_to_player', 'come_close_to_player',
+                      'step_back', 'walk_away_from_player', 'step_left',
+                      'step_right', 'go_to_position'):
+            if self.blocked:
+                return {'ok': True, 'result': {'ok': True, 'blocked': True}}
+            if action in ('step_forward', 'go_to_player', 'come_close_to_player'):
+                self.x += random.uniform(0.5, 1.5)
+                self.z += random.uniform(-0.5, 0.5)
+            elif action in ('step_back', 'walk_away_from_player'):
+                self.x -= random.uniform(0.5, 1.5)
+            elif action == 'step_left':
+                self.z += 1.0
+            elif action == 'step_right':
+                self.z -= 1.0
+            elif action == 'go_to_position':
+                self.x += random.uniform(-1, 1)
+                self.z += random.uniform(-1, 1)
 
         # добыча: предмет из MOCK_GATHER попадает в инвентарь
         if action == 'gather':
