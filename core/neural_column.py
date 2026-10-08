@@ -207,6 +207,21 @@ class NeuralColumn:
             return False
         try:
             d = np.load(path)
+
+            # Если размеры не совпадают с текущей архитектурой (например,
+            # изменился список действий → другой n_input), старые веса нельзя
+            # использовать напрямую. Проверяем и аккуратно переносим, что можно.
+            saved_in = d['W_in'].shape[0]
+            saved_hid = d['W_in'].shape[1]
+            saved_out = d['W_out'].shape[1]
+            if (saved_in != self.n_input or saved_hid != self.n_hidden
+                    or saved_out != self.n_output):
+                print(f"⚠️  Сохранённая колонна несовместима "
+                      f"({saved_in}→{saved_hid}→{saved_out}) с текущей "
+                      f"({self.n_input}→{self.n_hidden}→{self.n_output}). "
+                      f"Обучаюсь заново.")
+                return False
+
             self.W_in = d['W_in']
             self.W_rec = d['W_rec'] if 'W_rec' in d else self.W_rec
             self.W_out = d['W_out']

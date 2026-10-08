@@ -40,6 +40,7 @@ ACTION_NAMES = [
     'look_up', 'look_down', 'spin_around', 'stop',
     'interact', 'wait_1sec', 'mimic_last',
     'look_at_position', 'go_to_position',
+    'force_break_out', 'unequip_armor',
 ]
 
 DRIVES = ['hunger', 'fear', 'pain', 'boredom', 'loneliness',
