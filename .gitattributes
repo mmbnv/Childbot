@@ -1,0 +1,9 @@
+# bot.js хранится с CRLF (как в оригинале). Отключаем преобразование
+# строк, иначе редакторы нормализуют файл в LF и в diff попадает всё.
+bot.js -text
+
+# Остальное — LF.
+*.py     text eol=lf
+*.json   text eol=lf
+*.md     text eol=lf
+Makefile text eol=lf
