@@ -38,6 +38,8 @@ def main():
 
     brain = Brain(adapter)
     print("💚 Создатель:", brain.self_model.creator or brain.memory.creator_name)
+    print("🎓 Программа развития:", brain.curriculum.summary())
+    print("🧰 Ремесло:", brain.recipes.summary())
 
     save_counter = 0
     max_steps = None
@@ -92,6 +94,7 @@ def main():
             )
             print(f"   👁  {brain.workspace.summary()}")
             print(f"   🧩 {brain.wm.summary()}")
+            print(f"   🎓 {brain.curriculum.summary()} | {brain.crafting.summary()}")
 
         if max_steps and brain.step >= max_steps:
             print(f"✅ Достигнут лимит шагов ({max_steps})")

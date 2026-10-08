@@ -42,6 +42,9 @@ from core.neuromodulators import Neuromodulators
 from core.predictor import Predictor
 from core.autonomy import Autonomy
 from core.cortex import Cortex
+from core.recipes import Recipes
+from core.curriculum import Curriculum
+from core.crafting import CraftingSkill
 from core.cognition import Cognition
 from core.global_workspace import GlobalWorkspace
 from core.working_memory import WorkingMemory
@@ -79,6 +82,11 @@ class Brain:
         self.cortex = Cortex(adapter, self.drives, self.neuromod,
                              self.predictor, self.self_model, self.world_model, self.catalog)
         self.cognition = Cognition(self.knowledge)
+
+        # Ремесло: рецепты → учебная программа → умение доводить вещь до конца
+        self.recipes = Recipes()
+        self.curriculum = Curriculum(self.recipes)
+        self.crafting = CraftingSkill(self.recipes, self.curriculum, self.cortex.act)
 
         # Новая «человеческая» надстройка
         self.workspace = GlobalWorkspace()
@@ -485,7 +493,31 @@ class Brain:
             self._execute_plan()
             return True
 
-        # 2. Планирование (мысленная симуляция) при напряжении
+        # 2. Ремесло: учусь делать вещи шаг за шагом (дерево → доски → палки →
+        # верстак → кирка → камень → ...). Это «умнеть», а не просто бегать.
+        # Учусь, когда сыт, не в сильной боли и рядом нет угрозы: страх ночи
+        # или лёгкая скука учёбе не мешают, а вот драка и голод — мешают.
+        near = state.get('nearest_hostile')
+        in_danger = bool(near and near.get('distance', 999) < 8)
+        d_now = self.drives.to_dict()
+        can_learn = (not self.cognition.last_plan and not in_danger
+                     and d_now['hunger'] < 0.65 and self.drives.pain < 0.6)
+        if can_learn:
+            self.self_model.refresh()
+            step = self.crafting.tick(self.self_model.inventory)
+            if step:
+                self.wm.plan_step = f"ремесло: {step['action']} {step.get('params', {})}"
+                # Инвентарь изменился — читаем сразу, иначе следующий шаг
+                # программы будет считать по устаревшим данным.
+                self.self_model.refresh(force=True)
+                if step.get('ok') and step['action'] == 'craft':
+                    self.neuromod.on_success()
+                    self.episodic.remember(
+                        f"я сделал {step['params'].get('name')}", "craft",
+                        feeling='гордость', result='ok', valence=0.6, importance=0.6)
+                return True
+
+        # 3. Планирование (мысленная симуляция) при напряжении
         if tension > 1.8:
             plan = self.cognition.plan_if_needed(self.drives, state, self.predictor)
             if plan:

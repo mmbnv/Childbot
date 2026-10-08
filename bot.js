@@ -598,8 +598,113 @@ const ALL_ACTIONS = [
   { name: 'wait_1sec',     desc: 'ждать 1 секунду' },
   { name: 'mimic_last',    desc: 'повторить последнее действие папы' },
   { name: 'look_at_position', desc: 'посмотреть в точку params.x,y,z' },
-  { name: 'go_to_position', desc: 'идти к точке params.x, params.z' }
+  { name: 'go_to_position', desc: 'идти к точке params.x, params.z' },
+  { name: 'gather',        desc: 'добыть блок по названию (params.name или params.from)' },
+  { name: 'craft',         desc: 'скрафтить предмет (params.name) на верстаке при нужде' },
+  { name: 'place_table',   desc: 'поставить верстак рядом с собой' },
+  { name: 'smelt',         desc: 'переплавить предмет в печи (params.name)' }
 ];
+
+// --- КРАФТ И РЕМЕСЛО ---
+
+function mcData() {
+  try { return require('minecraft-data')(bot.version); }
+  catch (e) { return null; }
+}
+
+// Добыть ближайший блок одного из имён (подстроки). Сам идёт к цели.
+async function gatherBlock(names, maxDist = 16) {
+  const bp = bot.entity.position;
+  let best = null, bestD = 1e9;
+  for (let x = -maxDist; x <= maxDist; x++) {
+    for (let y = -4; y <= 4; y++) {
+      for (let z = -maxDist; z <= maxDist; z++) {
+        const pos = bp.offset(x, y, z);
+        const b = bot.blockAt(pos);
+        if (!b || !b.diggable) continue;
+        if (names.some(n => b.name.includes(n))) {
+          const d = Math.sqrt(x*x + y*y + z*z);
+          if (d < bestD) { bestD = d; best = b; }
+        }
+      }
+    }
+  }
+  if (!best) {
+    // Не блок, а животное (шерсть со овцы): подойти и добыть.
+    const animal = names.map(n => n.replace(/_wool$/, '')).find(a => PASSIVE.includes(a));
+    if (animal) return await gatherFromAnimal(animal);
+    return { ok: false, reason: 'not_found', wanted: names };
+  }
+  const dist = Math.hypot(best.position.x - bp.x, best.position.z - bp.z);
+  if (dist > 3) {
+    const ok = await goTo(best.position.x, best.position.z, 2, 8000);
+    if (!ok) return { ok: false, reason: 'cannot_reach', wanted: names };
+  }
+  try {
+    await smoothLookAt(best.position.x + 0.5, best.position.y + 0.5, best.position.z + 0.5, 3);
+    const block = bot.blockAt(best.position);
+    if (!block) return { ok: false, reason: 'block_gone' };
+    await bot.dig(block);
+    return { ok: true, gathered: block.name };
+  } catch (e) { return { ok: false, reason: e.message }; }
+}
+
+// Добыть ресурс с животного (шерсть с овцы): подойти, бить, подобрать.
+async function gatherFromAnimal(animalName) {
+  const pos = bot.entity.position;
+  let best = null, bestD = Infinity;
+  for (const id in bot.entities) {
+    const e = bot.entities[id];
+    if (e === bot.entity || !e.position || !e.name) continue;
+    if (e.name !== animalName) continue;
+    const d = e.position.distanceTo(pos);
+    if (d < bestD) { bestD = d; best = e; }
+  }
+  if (!best) return { ok: false, reason: 'animal_not_found', wanted: animalName };
+  try {
+    for (let hit = 0; hit < 8 && best.isValid; hit++) {
+      if (bot.entity.position.distanceTo(best.position) > 3) {
+        const ok = await goTo(best.position.x, best.position.z, 2, 5000);
+        if (!ok) break;
+      }
+      await smoothLookAt(best.position.x, best.position.y + 0.8, best.position.z, 3);
+      await bot.attack(best);
+      await new Promise(r => setTimeout(r, 500));
+    }
+    await new Promise(r => setTimeout(r, 800));  // подобрать выпавший предмет
+    return { ok: true, gathered: animalName };
+  } catch (e) { return { ok: false, reason: e.message }; }
+}
+
+// Скрафтить предмет. Сначала пробуем в инвентаре, потом на верстаке.
+async function craftItem(itemName, count = 1) {
+  const mc = mcData();
+  if (!mc) return { ok: false, reason: 'no_minecraft_data' };
+  const item = mc.itemsByName[itemName];
+  if (!item) return { ok: false, reason: 'unknown_item', item: itemName };
+
+  let recipes = bot.recipesFor(item.id, null, 1, null);
+  if (recipes && recipes.length) {
+    try { await bot.craft(recipes[0], count, null); return { ok: true, crafted: itemName }; }
+    catch (e) { return { ok: false, reason: e.message }; }
+  }
+
+  const tableBlock = mc.blocksByName['crafting_table'];
+  const table = tableBlock
+    ? bot.findBlock({ matching: tableBlock.id, maxDistance: 6 })
+    : null;
+  if (table) {
+    recipes = bot.recipesFor(item.id, null, 1, table);
+    if (recipes && recipes.length) {
+      try {
+        await smoothLookAt(table.position.x + 0.5, table.position.y + 0.5, table.position.z + 0.5, 3);
+        await bot.craft(recipes[0], count, table);
+        return { ok: true, crafted: itemName, at_table: true };
+      } catch (e) { return { ok: false, reason: e.message }; }
+    }
+  }
+  return { ok: false, reason: 'no_recipe_or_materials', item: itemName };
+}
 
 async function handleAction(action, text, params) {
   if (!bot.entity) return { ok: false, reason: 'bot_not_spawned' };
@@ -838,6 +943,70 @@ async function handleAction(action, text, params) {
         try { await bot.unequip(s); removed.push(s); } catch (e) {}
       }
       return { ok: true, removed };
+    }
+
+    case 'gather': {
+      const names = (params && (params.from || params.name))
+        ? (Array.isArray(params.from || params.name) ? (params.from || params.name) : [params.name])
+        : ['log', 'stone', 'coal_ore', 'iron_ore'];
+      return await gatherBlock(names);
+    }
+
+    case 'craft':
+      if (!params || !params.name) return { ok: false, reason: 'no_item_name' };
+      return await craftItem(params.name, (params && params.count) || 1);
+
+    case 'place_table': {
+      const mc = mcData();
+      const table = bot.inventory.items().find(i => i.name === 'crafting_table');
+      if (!table) return { ok: false, reason: 'no_crafting_table' };
+      try {
+        await bot.equip(table, 'hand');
+        const bp = bot.entity.position;
+        const dx = -Math.sin(bot.entity.yaw), dz = -Math.cos(bot.entity.yaw);
+        const ref = bot.blockAt(bp.offset(dx, -1, dz).floored());
+        if (!ref || ref.boundingBox !== 'block') return { ok: false, reason: 'no_surface' };
+        await bot.placeBlock(ref, vec3(0, 1, 0));
+        return { ok: true, placed: 'crafting_table' };
+      } catch (e) { return { ok: false, reason: e.message }; }
+    }
+
+    case 'smelt': {
+      const mc = mcData();
+      const itemName = (params && params.name) || 'raw_iron';
+      const input = bot.inventory.items().find(i => i.name === itemName);
+      if (!input) return { ok: false, reason: 'no_input', wanted: itemName };
+      const fuel = bot.inventory.items().find(i =>
+        ['coal', 'oak_planks', 'birch_planks', 'log', 'charcoal'].some(s => i.name.includes(s)));
+      if (!fuel) return { ok: false, reason: 'no_fuel' };
+      const furnaceBlock = mc && mc.blocksByName['furnace'];
+      let furnace = furnaceBlock
+        ? bot.findBlock({ matching: furnaceBlock.id, maxDistance: 6 })
+        : null;
+      if (!furnace) {
+        const furnaceItem = bot.inventory.items().find(i => i.name === 'furnace');
+        if (!furnaceItem) return { ok: false, reason: 'no_furnace' };
+        try {
+          await bot.equip(furnaceItem, 'hand');
+          const bp = bot.entity.position;
+          const dx = -Math.sin(bot.entity.yaw), dz = -Math.cos(bot.entity.yaw);
+          const ref = bot.blockAt(bp.offset(dx, -1, dz).floored());
+          if (ref && ref.boundingBox === 'block') {
+            await bot.placeBlock(ref, vec3(0, 1, 0));
+            furnace = bot.findBlock({ matching: furnaceBlock.id, maxDistance: 6 });
+          }
+        } catch (e) {}
+      }
+      if (!furnace) return { ok: false, reason: 'cannot_place_furnace' };
+      try {
+        await smoothLookAt(furnace.position.x + 0.5, furnace.position.y + 0.5, furnace.position.z + 0.5, 3);
+        await bot.openFurnace(furnace);
+        await bot.putInput(input);
+        await bot.putFuel(fuel);
+        await new Promise(r => setTimeout(r, 1200));
+        await bot.closeWindow(bot.currentWindow);
+        return { ok: true, smelted: itemName };
+      } catch (e) { return { ok: false, reason: e.message }; }
     }
 
     case 'hold_item': {
