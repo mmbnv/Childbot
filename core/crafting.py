@@ -1,0 +1,264 @@
+"""
+CraftingSkill — умение доводить вещь до готовности шаг за шагом.
+
+Это «руки» существа в ремесле. Оно не выполняет жёсткий список, а каждый раз
+смотрит на инвентарь и спрашивает: «чего мне не хватает прямо сейчас?» —
+и делает ровно один шаг к цели (добыть / поставить верстак / скрафтить).
+После каждого шага пересчитывает заново, поэтому работает и с настоящими
+выходами крафта (1 бревно → 4 доски), и с нехваткой инструмента.
+
+Так ребёнок и учится: не «сделай кирку», а «сначала палки, потом камень,
+потом кирка» — по одной ступени.
+"""
+import time
+
+from core.recipes import count_in, material_family
+
+
+class CraftingSkill:
+    def __init__(self, recipes, curriculum, act, max_depth=12, task_failure_cb=None,
+                 reasoner=None, sense=None):
+        # act(action, params) — моторный выход. В мозге это cortex.act, чтобы
+        # каждое ремесленное действие тоже обучало предсказание.
+        self.act = act
+        self.recipes = recipes
+        self.curriculum = curriculum
+        self.max_depth = max_depth
+        # Если не осилили задачу игры — сообщить об этом трекеру задач.
+        self.task_failure_cb = task_failure_cb
+        # Причинно-следственный разум: разобрать, почему шаг не удался.
+        self.reasoner = reasoner
+        # sense() -> свежий инвентарь из тела. Нужен, чтобы проверить, что
+        # действие действительно что-то изменило (см. _no_progress).
+        self.sense = sense
+
+        self.target = None
+        self.table_placed = False
+        self.fails = 0
+        self.last_action = None
+        self.last_result = None
+        self.cooldown_until = 0.0
+        self.crafted_count = 0
+
+    # ---------- ИНВЕНТАРЬ ----------
+
+    def _count(self, inventory, item):
+        return count_in(inventory, item)
+
+    def _has(self, inventory, item):
+        return self._count(inventory, item) > 0
+
+    # ---------- ПЛАН НА ОДИН ШАГ ----------
+
+    def _next_move(self, item, count, inventory, depth=0):
+        """Вернуть ('gather'|'craft'|'place_table', params) или None, если готово."""
+        if depth > self.max_depth:
+            return None
+        if self._count(inventory, item) >= count:
+            return None
+
+        r = self.recipes.get(item)
+        if not r:
+            return None
+
+        if r.get('kind') == 'gather':
+            # сначала нужный инструмент (кирка и т.п.)
+            for ing, cnt in r.get('need', {}).items():
+                mv = self._next_move(ing, cnt, inventory, depth + 1)
+                if mv:
+                    return mv
+            return ('gather', {'name': item, 'from': self.recipes.sources(item)})
+
+        # крафт: сперва ингредиенты
+        for ing, cnt in r.get('need', {}).items():
+            mv = self._next_move(ing, cnt, inventory, depth + 1)
+            if mv:
+                return mv
+
+        # плавка: сначала печь, потом топливо/руда уже проверены выше
+        if r.get('kind') == 'smelt':
+            mv = self._next_move('furnace', 1, inventory, depth + 1)
+            if mv:
+                return mv
+            return ('smelt', {'name': item})
+
+        # всё есть — нужен верстак?
+        if r.get('table') and not self.table_placed:
+            if self._has(inventory, 'crafting_table'):
+                return ('place_table', {})
+            mv = self._next_move('crafting_table', 1, inventory, depth + 1)
+            if mv:
+                return mv
+        return ('craft', {'name': item})
+
+    # ---------- ШАГ ----------
+
+    def tick(self, inventory, goal_override=None):
+        """Сделать один шаг к текущей цели. Вернуть описание шага или None.
+
+        inventory — список {'name','count'} из self_model.
+        goal_override — задача от игры (если есть): её выполняем в первую
+        очередь, а учебная программа ждёт. Так существо может пройти игру,
+        которую никто ему не объяснял.
+        """
+        if time.time() < self.cooldown_until:
+            return None
+
+        # Новая задача игры заменяет текущую цель; своя программа — только
+        # когда игра молчит.
+        if goal_override and (self.target is None
+                              or self.target.get('id') != goal_override.get('id')):
+            self.target = goal_override
+            self.fails = 0
+            print(f"🎓 Учусь: {goal_override['name']} ({goal_override.get('item')})")
+        elif self.target is None:
+            goal = self.curriculum.next_goal(inventory)
+            if not goal:
+                return None
+            self.target = goal
+            self.fails = 0
+            print(f"🎓 Учусь: {goal['name']} ({goal['item']})")
+
+        # Задача-действие (не рецепт): просто выполняем то, что просит игра.
+        if self.target.get('kind') == 'do':
+            return self._do_task()
+
+        move = self._next_move(self.target['item'], 1, inventory)
+        if move is None:
+            # цель достигнута — учебная программа сама перейдёт к следующей
+            # (ступени отмечаются в next_goal, поддержка повторяется вечно).
+            print(f"✅ Сделано: {self.target['name']}")
+            self.crafted_count += 1
+            self.target = None
+            return None
+
+        action, params = move
+        self.last_action = action
+        result = self.act(action, params=params)
+        r = (result or {}).get('result', {}) if isinstance(result, dict) else {}
+        self.last_result = r
+        if r.get('ok') and self._no_progress(action, params, inventory):
+            # Дело не сдвинулось, хотя тело сказало «готово»: спрашиваем
+            # «почему» и ищем другой путь, а не повторяем вслепую.
+            return self._handle_result(action, params,
+                                       {'ok': False, 'reason': 'no_progress'})
+        if r.get('ok'):
+            self.fails = 0
+        return self._handle_result(action, params, r)
+
+    def _no_progress(self, action, params, inventory):
+        """Не изменился ли инвентарь после «успешного» действия.
+
+        Защита от живого тупика: тело говорит «добыл», а вещь не появилась
+        (нет нужного блока рядом, добылся не тот предмет). Без проверки
+        существо копает одно и то же бесконечно.
+
+        Инвентарь берём СВЕЖИЙ из тела (sense), иначе замерзший список
+        покажет, что ничего не изменилось, даже когда всё получилось.
+        """
+        if action not in ('gather', 'craft', 'smelt'):
+            return False
+        target = params.get('name') if params else None
+        if not target:
+            return False
+        after = inventory
+        if self.sense is not None:
+            try:
+                after = self.sense() or inventory
+            except Exception:
+                after = inventory
+        return self._count(after, target) <= self._count(inventory, target)
+
+    def _do_task(self):
+        """Выполнить задачу-действие от игры (дверь, соединение, поиск)."""
+        action = self.target.get('action') or 'look_around'
+        params = self.target.get('params')
+        self.last_action = action
+        result = self.act(action, params=params)
+        r = (result or {}).get('result', {}) if isinstance(result, dict) else {}
+        self.last_result = r
+        return self._handle_result(action, params, r)
+
+    def _handle_result(self, action, params, r):
+        params = params or {}
+        if r.get('ok'):
+            self.fails = 0
+            if action == 'place_table':
+                self.table_placed = True
+            if action == 'craft':
+                print(f"🔨 Скрафтил: {params.get('name')}")
+            elif action == 'smelt':
+                print(f"🔥 Переплавил: {params.get('name')}")
+            elif action == 'gather':
+                print(f"⛏️  Добыл: {params.get('name')}")
+            return {'action': action, 'params': params, 'ok': True}
+
+        # неудача: сперва СПРОСИТЬ «почему?» и попробовать средство, и лишь
+        # потом копить счётчик. Так существо решает проблему, а не залипает.
+        reason = r.get('reason', 'unknown')
+        if self._try_remedy(action, params, reason):
+            return {'action': action, 'params': params, 'ok': False, 'reason': reason,
+                    'remedy': True}
+        self.fails += 1
+        if self.fails <= 3:
+            print(f"⚠️  Крафт-шаг не удался: {action} {params} ({reason})")
+        if self.fails >= 6:
+            if self.target.get('from_task') and self.task_failure_cb:
+                self.task_failure_cb()
+            else:
+                self.curriculum.note_failure()
+            print(f"⏭️  Пропускаю {self.target['item']} ({reason}) — вернусь позже")
+            self.target = None
+            self.fails = 0
+            self.cooldown_until = time.time() + 20
+        return {'action': action, 'params': params, 'ok': False, 'reason': reason}
+
+    def _try_remedy(self, action, params, reason):
+        """Спросить «почему?» и попробовать средство. True — если помогло.
+
+        Так работает причинно-следственная связь: не «не вышло и ладно», а
+        «не вышло, потому что X; чтобы вышло — делаю Y».
+        """
+        if self.reasoner is None:
+            return False
+        before = {'support_below': getattr(self, '_support_below', True),
+                  'blocked': getattr(self, '_blocked', False)}
+        cause = self.reasoner.diagnose(action, params, reason, before)
+        if not cause or cause.key in ('unknown', 'materials', 'tool', 'no_table',
+                                      'recipe_unknown', 'input', 'fuel'):
+            # Эти причины лечит уже сам план ремесла (он пересчитает и добыст
+            # недостающее) — не дублируем здесь.
+            return False
+        if cause.key == 'no_progress':
+            # «Успех», но вещь не появилась: пробуем добыть её в другом месте
+            # или уйти и поискать. Средство — уже другой gather/шаг.
+            pass
+        # Не пробовать одно и то же средство бесконечно.
+        sig = (cause.key, cause.action, str(cause.params))
+        if sig == getattr(self, '_last_remedy', None):
+            return False
+        self._last_remedy = sig
+        # Запомнить причину: пробное действие средства перезапишет исход в
+        # cortex, поэтому фиксируем её здесь — иначе причина забудется.
+        self.reasoner.explain(action, params, False, reason, before)
+
+        for step_action, step_params in cause.plan:
+            if not step_action:
+                continue
+            # То же действие с теми же параметрами — это не средство, а повтор.
+            if step_action == action and step_params == params:
+                continue
+            print(f"🤔 Почему не вышло: {cause.text} → пробую {step_action}")
+            result = self.act(step_action, params=step_params)
+            rr = (result or {}).get('result', {}) if isinstance(result, dict) else {}
+            if rr.get('ok'):
+                self.fails = 0
+                # Средство помогло — значит, я понял эту причину и решил её.
+                self.reasoner.note_fix(cause)
+                return True
+        return False
+
+    def summary(self):
+        if self.target:
+            return f"делаю: {self.target['name']} ({self.target['item']})"
+        return "ремесло: " + self.curriculum.summary()
