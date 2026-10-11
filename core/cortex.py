@@ -56,6 +56,7 @@ class Cortex:
         self.pending_prediction = None
         self.pending_time = 0
         self.last_action = None
+        self.last_params = None
         self.last_result = None
         self._recent_actions = []
 
@@ -120,6 +121,7 @@ class Cortex:
 
     def act(self, action, params=None):
         self.last_action = action
+        self.last_params = params
         self.pending_action = action
         self.pending_drives_before = self.snapshot_drives()
         self.pending_context = self._snapshot_context()

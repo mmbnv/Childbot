@@ -36,6 +36,12 @@ MOCK_CRAFT = {
     'bucket': {'iron_ingot': 3}, 'bow': {'stick': 3, 'string': 3},
     'arrow': {'flint': 1, 'stick': 1, 'feather': 1},
 }
+# Твёрдые блоки не бьются без инструмента — фундаментальный закон («инструмент»).
+MOCK_TOOL = {
+    'cobblestone': 'wooden_pickaxe', 'stone': 'wooden_pickaxe',
+    'coal': 'wooden_pickaxe', 'raw_iron': 'stone_pickaxe',
+    'iron_ore': 'stone_pickaxe',
+}
 
 
 class MockAdapter:
@@ -61,6 +67,8 @@ class MockAdapter:
         self.on_ground = True        # стою на твёрдом
         self.support_below = True    # подо мной твёрдый блок
         self.blocked = False         # прошлое движение упёрлось в стену
+        self.solid_ahead = False     # твёрдое прямо по курсу (стена)
+        self.reach = 1.0             # насколько далеко до цели (дотянуться?)
         self.door_open = False       # открыта ли ближняя дверь
         self.near_door = True        # дверь рядом (мир даёт шанс её открыть)
         self.tasks = self._default_tasks()
@@ -123,6 +131,8 @@ class MockAdapter:
             'on_ground': self.on_ground,
             'support_below': self.support_below,
             'blocked': self.blocked,
+            'solid_ahead': self.solid_ahead,
+            'reach': self.reach,
             'near_door': self.near_door,
             'door_open': self.door_open,
         }
@@ -244,11 +254,17 @@ class MockAdapter:
                 self.x += random.uniform(-1, 1)
                 self.z += random.uniform(-1, 1)
 
-        # добыча: предмет из MOCK_GATHER попадает в инвентарь
+        # добыча: предмет из MOCK_GATHER попадает в инвентарь.
+        # Твёрдое не бьётся без нужного инструмента — и это ЧЕСТНАЯ причина
+        # неудачи, которую мозг должен понять и вылечить (скрафтить кирку).
         if action == 'gather':
             name = (params.get('name') or (params.get('from') or ['oak_log'])[0])
             if name == 'stone':
                 name = 'cobblestone'
+            need_tool = MOCK_TOOL.get(name)
+            if need_tool and self._count(need_tool) <= 0:
+                return {'ok': False, 'result': {'ok': False, 'reason': 'no_tool',
+                                                'need': need_tool}}
             if name in MOCK_GATHER or name in MOCK_CRAFT:
                 self._add(name, 1)
                 return {'ok': True, 'result': {'ok': True, 'gathered': name}}

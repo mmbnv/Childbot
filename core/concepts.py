@@ -67,6 +67,10 @@ def extract_features(state, self_state):
         'door_open': bool(state.get('door_open', False)),
         'hostile': (float(hd) if hd is not None else None),
         'night': bool(state.get('is_night', False)),
+        # Для причинно-следственного разума: насколько близко/далеко до цели
+        # и есть ли твёрдое прямо по курсу.
+        'reach': (float(state['reach']) if state.get('reach') is not None else None),
+        'solid_ahead': bool(state.get('solid_ahead', False)),
     }
 
 

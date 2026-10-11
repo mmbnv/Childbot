@@ -26,6 +26,8 @@ class Game2Adapter:
         self.on_ground = True
         self.support_below = True
         self.blocked = False
+        self.solid_ahead = False
+        self.reach = 1.0
         self.near_door = True
         self.door_open = False
         self.has_key = False
@@ -62,7 +64,8 @@ class Game2Adapter:
             'nearest_hostile': self.hostile,
             'recent_damage': False, 'damage_time': 0,
             'on_ground': self.on_ground, 'support_below': self.support_below,
-            'blocked': self.blocked, 'near_door': self.near_door,
+            'blocked': self.blocked, 'solid_ahead': self.solid_ahead,
+            'reach': self.reach, 'near_door': self.near_door,
             'door_open': self.door_open,
         }
 

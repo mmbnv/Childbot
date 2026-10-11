@@ -253,6 +253,36 @@ function hasSkyAbove() {
   return true;
 }
 
+// Насколько близко ближайший твёрдый блок — «дотягиваюсь ли я».
+function nearestBlockDist() {
+  if (!bot.entity) return null;
+  const bp = bot.entity.position;
+  let nd = Infinity;
+  for (let x = -4; x <= 4; x++) {
+    for (let y = -2; y <= 2; y++) {
+      for (let z = -4; z <= 4; z++) {
+        const d2 = x * x + y * y + z * z;
+        if (d2 < 0.5 || d2 > nd) continue;
+        const b = bot.blockAt(bp.offset(x, y, z));
+        if (b && b.boundingBox === 'block') nd = d2;
+      }
+    }
+  }
+  return nd === Infinity ? null : Math.sqrt(nd);
+}
+
+// Твёрдое прямо по курсу — «стена» (для причинно-следственного разума).
+function solidAhead() {
+  if (!bot.entity) return false;
+  const bp = bot.entity.position;
+  const dx = -Math.sin(bot.entity.yaw), dz = -Math.cos(bot.entity.yaw);
+  for (const d of [1, 2]) {
+    const b = bot.blockAt(bp.offset(dx * d, 0, dz * d).floored());
+    if (b && b.boundingBox === 'block') return true;
+  }
+  return false;
+}
+
 async function goTo(x, z, tolerance = 1.0, timeout = 10000) {
   const start = Date.now();
   return new Promise((resolve) => {
@@ -478,6 +508,8 @@ const server = http.createServer((req, res) => {
       player: pi,
       in_pit: isInPit(),
       has_sky_above: hasSkyAbove(),
+      solid_ahead: solidAhead(),
+      reach: nearestBlockDist(),
       is_night: bot.time.timeOfDay > 13000 && bot.time.timeOfDay < 23000,
       time_of_day: bot.time.timeOfDay,
       nearest_hostile: nearestHostile ? { name: nearestHostile.name, distance: nearestHostile.distance } : null,

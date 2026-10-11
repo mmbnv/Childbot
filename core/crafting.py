@@ -14,7 +14,8 @@ import time
 
 
 class CraftingSkill:
-    def __init__(self, recipes, curriculum, act, max_depth=12, task_failure_cb=None):
+    def __init__(self, recipes, curriculum, act, max_depth=12, task_failure_cb=None,
+                 reasoner=None):
         # act(action, params) — моторный выход. В мозге это cortex.act, чтобы
         # каждое ремесленное действие тоже обучало предсказание.
         self.act = act
@@ -23,6 +24,8 @@ class CraftingSkill:
         self.max_depth = max_depth
         # Если не осилили задачу игры — сообщить об этом трекеру задач.
         self.task_failure_cb = task_failure_cb
+        # Причинно-следственный разум: разобрать, почему шаг не удался.
+        self.reasoner = reasoner
 
         self.target = None
         self.table_placed = False
@@ -160,9 +163,13 @@ class CraftingSkill:
                 print(f"⛏️  Добыл: {params.get('name')}")
             return {'action': action, 'params': params, 'ok': True}
 
-        # неудача: копим счётчик и иногда отступаем, чтобы не залипнуть
-        self.fails += 1
+        # неудача: сперва СПРОСИТЬ «почему?» и попробовать средство, и лишь
+        # потом копить счётчик. Так существо решает проблему, а не залипает.
         reason = r.get('reason', 'unknown')
+        if self._try_remedy(action, params, reason):
+            return {'action': action, 'params': params, 'ok': False, 'reason': reason,
+                    'remedy': True}
+        self.fails += 1
         if self.fails <= 3:
             print(f"⚠️  Крафт-шаг не удался: {action} {params} ({reason})")
         if self.fails >= 6:
@@ -175,6 +182,41 @@ class CraftingSkill:
             self.fails = 0
             self.cooldown_until = time.time() + 20
         return {'action': action, 'params': params, 'ok': False, 'reason': reason}
+
+    def _try_remedy(self, action, params, reason):
+        """Спросить «почему?» и попробовать средство. True — если помогло.
+
+        Так работает причинно-следственная связь: не «не вышло и ладно», а
+        «не вышло, потому что X; чтобы вышло — делаю Y».
+        """
+        if self.reasoner is None:
+            return False
+        before = {'support_below': getattr(self, '_support_below', True),
+                  'blocked': getattr(self, '_blocked', False)}
+        cause = self.reasoner.diagnose(action, params, reason, before)
+        if not cause or cause.key in ('unknown', 'materials', 'tool', 'no_table',
+                                      'recipe_unknown', 'input', 'fuel'):
+            # Эти причины лечит уже сам план ремесла (он пересчитает и добыст
+            # недостающее) — не дублируем здесь.
+            return False
+        # Не пробовать одно и то же средство бесконечно.
+        sig = (cause.key, cause.action, str(cause.params))
+        if sig == getattr(self, '_last_remedy', None):
+            return False
+        self._last_remedy = sig
+
+        for step_action, step_params in cause.plan:
+            if not step_action or step_action == action:
+                continue
+            print(f"🤔 Почему не вышло: {cause.text} → пробую {step_action}")
+            result = self.act(step_action, params=step_params)
+            rr = (result or {}).get('result', {}) if isinstance(result, dict) else {}
+            if rr.get('ok'):
+                self.fails = 0
+                # Средство помогло — значит, я понял эту причину и решил её.
+                self.reasoner.note_fix(cause)
+                return True
+        return False
 
     def summary(self):
         if self.target:

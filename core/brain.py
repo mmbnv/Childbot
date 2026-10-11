@@ -48,6 +48,7 @@ from core.crafting import CraftingSkill
 from core.concepts import ConceptLearner, extract_features
 from core.experiment import Experimenter
 from core.tasks import TaskTracker
+from core.causality import Reasoner
 from core.cognition import Cognition
 from core.global_workspace import GlobalWorkspace
 from core.working_memory import WorkingMemory
@@ -97,10 +98,13 @@ class Brain:
         self.experimenter = Experimenter(self.concepts)
         # Задачи, которые ставит игра (любая). Ребёнок может пройти её сам.
         self.tasks = TaskTracker(self.recipes)
+        # Причинно-следственный разум: почему не вышло и что с этим делать.
+        self.causes = Reasoner(recipes=self.recipes)
         self.crafting = CraftingSkill(self.recipes, self.curriculum, self.cortex.act,
-                                      task_failure_cb=self.tasks.note_failure)
-        # Понятия о мире подсказывают выбор действия (что ценно, что запрещено).
-        self.cortex.advisor = self.concepts.advice
+                                      task_failure_cb=self.tasks.note_failure,
+                                      reasoner=self.causes)
+        # Понятия и причины подсказывают выбор действия (что ценно, что запрещено).
+        self.cortex.advisor = self._advise
         self._last_features = None
         self._pending_law = None
 
@@ -147,6 +151,7 @@ class Brain:
         print(f"💊 {self.neuromod.summary()}")
         print(f"🗣️  Выучено фраз: {len(self.adaptive.learned)}")
         print(f"📖 {self.episodic.summary()}")
+        print(f"🧠 {self.causes.summary()}")
         print(self.cognition.summary())
 
     # ============ LLM ============
@@ -274,6 +279,15 @@ class Brain:
             self._say(reply)
 
     def _reply_only(self, text, sender, state):
+        # «Почему не выходит?» — отвечаю из причинно-следственной памяти.
+        low = text.lower()
+        if 'почему' in low or 'зачем' in low:
+            top = self.causes.top_belief()
+            if top:
+                _, b = top
+                need = f", нужно {b['need']}" if b.get('need') else ""
+                return f"папа, я понял: {b['text']}{need}. Придумаю, как иначе"
+
         d = self.drives.to_dict()
         context = self.conversation[-6:]
         ctx_str = '\n'.join([f"{c['who']}: {c['text']}" for c in context])
@@ -444,6 +458,28 @@ class Brain:
 
     # ============ ПОНЯТИЯ (законы мира) ============
 
+    def _advise(self, features, action):
+        """Подсказка от понятий и причин: что ценно, что запрещено.
+
+        Понятия знают законы («гравитация», «проход»), причины — «почему
+        не вышло и что помогает». Обе подсказки складываются.
+        """
+        bonus, forbid = 0.0, False
+        try:
+            b, f = self.concepts.advice(features, action)
+            bonus += b
+            forbid = forbid or f
+        except Exception:
+            pass
+        try:
+            # params нет — советуем по причине в целом, не по конкретной цели
+            b, f = self.causes.advice(features, action, None)
+            bonus += b
+            forbid = forbid or f
+        except Exception:
+            pass
+        return bonus, forbid
+
     def _observe_concepts(self, state):
         """Сравнить «было → стало» и обновить понятия о мире.
 
@@ -456,11 +492,39 @@ class Brain:
             action = self.cortex.last_action
             self.concepts.observe(self._last_features, after, action,
                                   self.cortex.last_result)
+            # Причинно-следственный разбор: если не вышло — почему и что делать.
+            self._observe_cause(action, after)
             if self._pending_law:
                 self.experimenter.observe(
                     self._pending_law, self.concepts.confidence(self._pending_law) > 0.5)
                 self._pending_law = None
         self._last_features = after
+
+    def _observe_cause(self, action, after):
+        """Разобрать исход последнего действия: причина неудачи и средство."""
+        r = self.cortex.last_result
+        if not r:
+            return
+        before = dict(self._last_features or {})
+        # Инвентарь нужен, чтобы понять, какого материала не хватает.
+        before['_inventory'] = self.self_model.inventory
+        cause = self.causes.explain(action, self.cortex.last_params, r.get('ok', True),
+                                    r.get('reason', ''), before, after)
+        if cause and cause.key != 'unknown':
+            self.wm.hold('cause', cause.text, salience=1.2)
+            self.episodic.remember(
+                f"не вышло: {cause.text}", action,
+                feeling='досада', result='причина', valence=-0.3, importance=0.5)
+
+    def _reflect_on_causes(self, state):
+        """Размышление вслух о причине неудачи и о новом способе решения."""
+        thought = self.causes.reflect(self._last_features, time.time())
+        if not thought:
+            return
+        print(f"🤔 {thought}")
+        self.wm.self_talk = thought
+        if random.random() < 0.3:
+            self.adapter.say(thought)
 
     # ============ ЗАДАЧИ ИГРЫ ============
 
@@ -637,6 +701,7 @@ class Brain:
         self.cognition.save()
         self.memory.save()
         self.concepts.save()
+        self.causes.save()
 
     # ============ СТУПОР ============
 
@@ -774,6 +839,9 @@ class Brain:
             self.wm.self_talk = thought
             if random.random() < 0.3:
                 self.adapter.say(thought)
+
+        # РАЗМЫШЛЕНИЕ о причинах: почему не выходит и как иначе.
+        self._reflect_on_causes(state)
 
         # Периодическая консолидация (как во сне)
         if self.step % 300 == 0:

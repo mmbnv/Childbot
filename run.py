@@ -45,6 +45,7 @@ def main():
     print("🎓 Программа развития:", brain.curriculum.summary())
     print("🧰 Ремесло:", brain.recipes.summary())
     print("🌍 Понятия о мире:", brain.concepts.summary())
+    print("🧠 Причины и следствия:", brain.causes.summary())
     print("🎯 Задачи игры:", brain.tasks.summary())
 
     save_counter = 0
