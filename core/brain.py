@@ -54,6 +54,16 @@ from core.global_workspace import GlobalWorkspace
 from core.working_memory import WorkingMemory
 from core.episodic_memory import EpisodicMemory
 from core.voice import Voice, VOICE_ENABLED
+# --- человеческая надстройка: характер, чувства, привязанность, игра, рост ---
+from core.temperament import Temperament
+from core.interoception import Interoception
+from core.emotions import Emotions
+from core.social import Social
+from core.play import Play
+from core.habits import Habits
+from core.metacognition import Metacognition
+from core.language import Language
+from core.development import Development
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
 OLLAMA_MODEL = "qwen2.5:3b"
@@ -66,6 +76,10 @@ TEMPLATE_PATTERN = re.compile(r'<[^>]{0,50}>')
 
 def has_cjk(t):
     return bool(CJK_PATTERN.search(t))
+
+
+def clip01(v, lo=0.0, hi=1.0):
+    return max(lo, min(hi, v))
 
 
 class Brain:
@@ -114,9 +128,35 @@ class Brain:
         self.wm = WorkingMemory()
         self.episodic = EpisodicMemory()
 
+        # --- ЧЕЛОВЕЧЕСКОЕ ЯДРО ---
+        # Характер: рождается и остаётся собой. Чувства: тело, эмоция, настроение.
+        self.temperament = Temperament()
+        # Нейромодуляторы стартуют от характера (у каждого своя «биохимия»).
+        for mod in ('dopamine', 'serotonin', 'noradrenaline', 'acetylcholine',
+                    'cortisol', 'oxytocin', 'endorphins'):
+            setattr(self.neuromod, mod,
+                    clip01(0.6 * getattr(self.neuromod, mod)
+                           + 0.4 * self.temperament.baseline(mod)))
+        self.intero = Interoception()
+        self.feelings = Emotions(self.temperament)
+        # «Свой человек»: привязанность к папе и понимание его.
+        self.social = Social(self.temperament)
+        # Игра, привычки, метапознание, язык, взросление.
+        self.play = Play(self.temperament)
+        self.habits = Habits()
+        self.meta = Metacognition()
+        self.language = Language(self.temperament)
+        self.development = Development()
+
         self.adaptive = AdaptiveIntent(self.catalog)
         self.intent = IntentResolver(self.adaptive, self.catalog)
         self.voice = Voice(enabled=VOICE_ENABLED)
+
+        # Короткая память о последнем шаге — для оценки «было → стало».
+        self._last_play_step = None
+        # Какие состояния уже пережиты (чтобы чувство вспыхивало на ПЕРЕХОДЕ,
+        # а не каждый тик): «стало плохо» важнее, чем «плохо уже давно».
+        self._felt_states = set()
 
         self.step = 0
         self.last_positions = []
@@ -153,6 +193,11 @@ class Brain:
         print(f"🗣️  Выучено фраз: {len(self.adaptive.learned)}")
         print(f"📖 {self.episodic.summary()}")
         print(f"🧠 {self.causes.summary()}")
+        print(f"🧬 Характер: {self.temperament.summary()}")
+        print(f"🫀 {self.intero.summary()}")
+        print(f"❤️  {self.feelings.summary()}")
+        print(f"🤝 {self.social.summary()}")
+        print(f"🌱 {self.development.summary()}")
         print(self.cognition.summary())
 
     # ============ LLM ============
@@ -248,6 +293,25 @@ class Brain:
         self.world_model.refresh(force=True)
         self.self_model.set_creator(sender)
 
+        # Социальное: папа заговорил — значит, он рядом. Обновляем модель его
+        # психики (чего он хочет, что чувствует) и радуемся контакту.
+        self.social.tom.observe(sender, message_text=text)
+        self.social.last_seen = time.time()
+        self.neuromod.on_creator_near(3)      # окситоцин: свой человек рядом
+        # Эмпатия: если папа доволен — и мне хорошо; если сердит — насторожусь.
+        if self.social.tom.emotion == 'радость':
+            self.feelings.contagion('радость', 0.6)
+        elif self.social.tom.emotion in ('злость', 'печаль'):
+            self.feelings.contagion('печаль', 0.5)
+        else:
+            self.feelings.feel('интерес', 0.5, 'папа говорит')
+
+        # Язык: запоминаем слова папы и учимся говорить связнее с возрастом.
+        for w in text.split():
+            clean = w.strip('.,!?:;«»"\'').lower()
+            if len(clean) >= 3 and not self.language.know(clean):
+                self.language.learn_word(clean, source=sender)
+
         # Внимание: речь папы всегда значима
         self.workspace.submit('speech', f'{sender}: {text}', 3.0)
         self.workspace.compete(self.neuromod)
@@ -280,14 +344,23 @@ class Brain:
             self._say(reply)
 
     def _reply_only(self, text, sender, state):
-        # «Почему не выходит?» — отвечаю из причинно-следственной памяти.
         low = text.lower()
+        # «Как ты? / что чувствуешь?» — отвечаю из живого чувства, а не из чисел.
+        if any(k in low for k in ('как ты', 'как дела', 'что чувствуешь',
+                                  'что с тобой', 'как ты себя')):
+            f = self.feelings.current
+            body = self.intero.describe()
+            return f"папа, мне {f.name.lower()}, {body}"
+        # «Почему не выходит?» — отвечаю из причинно-следственной памяти.
         if 'почему' in low or 'зачем' in low:
             top = self.causes.top_belief()
             if top:
                 _, b = top
                 need = f", нужно {b['need']}" if b.get('need') else ""
                 return f"папа, я понял: {b['text']}{need}. Придумаю, как иначе"
+            ins = self.meta.last_insight()
+            if ins:
+                return f"папа, {ins}"
 
         d = self.drives.to_dict()
         context = self.conversation[-6:]
@@ -295,14 +368,18 @@ class Brain:
         mood = self.neuromod.mood()
         symbolic = self.cognition.symbolic.summary_for_prompt(5)
         last_thought = self.cognition.voice.last()
+        f = self.feelings.current
 
-        prompt = f"""Ты — цифровой ребёнок 3-5 лет. Отец — {sender}. Зовёшь "папа".
+        prompt = f"""Ты — цифровой ребёнок ({self.development.stage_name()}) в Minecraft.
+Отец — {sender}. Зовёшь "папа".
 Отвечай ТОЛЬКО на русском. ОДНОЙ короткой фразой (до 12 слов).
 Не используй шаблоны и угловые скобки.
 
-Твои чувства: страх {d['fear']}, боль {d['pain']}, голод {d['hunger']}, одиноко {d['loneliness']}, устал {d['fatigue']}.
-Эмоция: {self.neuromod.emotion}
-Настроение: {mood}
+Твой характер: {self.temperament.summary()}
+Твоё чувство сейчас: {f.name} — {f.cause}
+Что ощущаешь в теле: {self.intero.describe()}
+Настроение: {self.feelings.mood_word} ({mood})
+Привязанность к папе: {self.social.bond:.2f}
 Что знаю о мире: {symbolic}
 О чём думал недавно: {last_thought or 'ни о чём'}
 
@@ -311,8 +388,29 @@ class Brain:
 
 Папа: "{text}"
 
-Ответь одной фразой."""
-        return self._call_llm_text(prompt)
+Ответь одной фразой от всего сердца."""
+        reply = self._call_llm_text(prompt)
+        # Без LLM — говорим по возрасту (лепет → фраза), а не молчим.
+        if not reply:
+            reply = self._offline_reply(text, f)
+        return reply
+
+    def _offline_reply(self, text, feeling):
+        """Ответ без LLM: по возрасту и чувству, своими словами."""
+        stage = self.development.speech_stage()
+        if stage <= 0:
+            content = 'а-а'
+        elif feeling.name in ('страх', 'боль'):
+            content = f'мне {feeling.name}'
+        elif feeling.name == 'радость':
+            content = 'мне весело'
+        elif feeling.name in ('печаль', 'одиночество', 'обида'):
+            content = 'мне грустно без тебя'
+        elif 'молодец' in text.lower() or 'спасибо' in text.lower():
+            content = 'я стараюсь'
+        else:
+            content = 'я тут'
+        return self.language.phrase(stage, content, name='папа')
 
     # ============ ИМИТАЦИЯ ============
 
@@ -450,6 +548,13 @@ class Brain:
         if p and p.get('distance', 999) < 10:
             self.workspace.submit('attachment', f"папа рядом ({p['distance']:.0f}м)",
                                   1.0 + self.neuromod.oxytocin)
+        # собственное чувство — важный сигнал «что со мной»
+        f = self.feelings.current
+        if f.intensity > 0.4:
+            self.workspace.submit('feeling', f"{f.name}: {f.cause}", f.intensity * 1.4)
+        # телесное ощущение
+        if abs(self.intero.tone) > 0.4:
+            self.workspace.submit('body', self.intero.describe(), abs(self.intero.tone))
         # собственная мысль
         last_thought = self.cognition.voice.last()
         if last_thought:
@@ -479,6 +584,12 @@ class Brain:
             forbid = forbid or f
         except Exception:
             pass
+        # Чувство красит выбор: страх тянет прочь, злость — навстречу,
+        # радость — к действию. Так решение «человеческое», а не нейтральное.
+        try:
+            bonus += self.feelings.bias_score(action)
+        except Exception:
+            pass
         return bonus, forbid
 
     def _observe_concepts(self, state):
@@ -495,11 +606,31 @@ class Brain:
                                   self.cortex.last_result)
             # Причинно-следственный разбор: если не вышло — почему и что делать.
             self._observe_cause(action, after)
+            # Привычки и метапознание учатся на исходе действия.
+            self._observe_habits(action)
             if self._pending_law:
                 self.experimenter.observe(
                     self._pending_law, self.concepts.confidence(self._pending_law) > 0.5)
                 self._pending_law = None
         self._last_features = after
+
+    def _observe_habits(self, action):
+        """Привычка крепнет от успеха и слабеет от неудачи; мета — наблюдает."""
+        r = self.cortex.last_result or {}
+        ok = bool(r.get('ok', True))
+        # Метапознание следит за собой: не залип ли, не теряю ли понимание.
+        self.meta.observe(action, ok)
+        # Привычка: повторяющееся действие в той же ситуации закрепляется.
+        # Но привычка — это то, что МЕНЯЕТ мир; «смотрел/ждал» привычкой не
+        # становится, иначе существо застывает.
+        cue = getattr(self, '_habit_cue', None)
+        if cue and action not in self.habits.IDLE:
+            if ok:
+                self.habits.strengthen(cue, action, reward=True)
+            else:
+                # Неудача в знакомой ситуации ослабляет привычку — так она
+                # не превращается в вечное залипание.
+                self.habits.punish(cue)
 
     def _observe_cause(self, action, after):
         """Разобрать исход последнего действия: причина неудачи и средство."""
@@ -542,6 +673,121 @@ class Brain:
         self.tasks.poll(self.adapter, self.self_model.inventory)
         return self.tasks.next_goal(self.self_model.inventory)
 
+    # ============ ЧЕЛОВЕЧЕСКОЕ ПОВЕДЕНИЕ ============
+
+    def _meta_step(self, state, in_danger):
+        """Метапознание: заметить залипание и сменить подход, а не упорствовать.
+
+        Это перебивает работу: если я долблю одно и то же или перестал понимать,
+        продолжать бессмысленно. «Поумнеть» важнее, чем «доработать».
+        """
+        if self.meta.stuck() and self.step % 3 == 0:
+            strategy = self.meta.pick_strategy()
+            if strategy == 'ask_papa':
+                q = self.language.ask(confused=True)
+                self._say(q)
+                self.meta.insight('я не понимаю — спрошу папу')
+                return True
+            if strategy == 'switch_task':
+                self.cognition.last_plan = None
+                self.wm.plan_step = None
+                self.wm.hold('feeling', 'сменю занятие', salience=1.0)
+                self.meta.insight('залип — сменю занятие')
+                return True
+            if strategy == 'reappraise':
+                self.feelings.regulate('reappraisal', self.drives, self.neuromod)
+                self.meta.insight('попробую иначе')
+                return True
+        return False
+
+    def _regulate(self, state, in_danger):
+        """Справиться с сильным чувством в свободную минуту.
+
+        Пока есть дело (план, ремесло) — делаю его даже с тревогой на душе.
+        Но когда заняться нечем, неприятное чувство нельзя оставлять: сначала
+        утешение у папы, потом переосмысление, потом отвлечение.
+        """
+        f = self.feelings.current
+        p = state.get('player')
+        papa_near = bool(p and p.get('distance', 999) < 12)
+        if in_danger:
+            return False
+        if not (f.name in ('страх', 'печаль', 'злость', 'обида', 'стыд', 'одиночество')
+                and f.intensity > 0.55):
+            return False
+
+        if papa_near and self.social.bond > 0.2:
+            if self.feelings.regulate('comfort', self.drives, self.neuromod,
+                                      attachment_near=True):
+                self.cortex.act('come_close_to_player')
+                self.wm.hold('feeling', 'папа утешил', salience=1.3)
+                return True
+        if f.name in ('страх', 'печаль') and self.meta.confidence > 0.4:
+            if self.feelings.regulate('reappraisal', self.drives, self.neuromod):
+                self.meta.insight(f"я успокоил себя: {f.name}")
+                self.wm.hold('feeling', 'я справляюсь', salience=1.1)
+                return True
+        if self.feelings.regulate('distraction', self.drives, self.neuromod):
+            self.wm.hold('feeling', 'отвлекаюсь', salience=1.0)
+            return True
+        return False
+
+    def _play_and_habits(self, state, in_danger):
+        """Живое поведение в свободную минуту: утешение, вопрос, игра, привычка.
+
+        Это не перебивает дело — ребёнок этим занят, когда больше нечем.
+        Возвращает True, если шаг сделан.
+        """
+        d = self.drives.to_dict()
+        f = self.feelings.current
+
+        # 0. УТЕШЕНИЕ. Сильное неприятное чувство без дела — сперва успокоиться.
+        if self._regulate(state, in_danger):
+            return True
+
+        # 1. ВОПРОС. Ребёнок спрашивает «почему?» из любопытства и непонимания.
+        if self.language.should_ask(d['curiosity'] * self.development.question_urge(),
+                                    confusion=self.meta.confusion):
+            q = self.language.ask()
+            self._say(q)
+            self.meta.ask(q)
+            return True
+
+        # 2. ИГРА. Когда сыт, в безопасности и в хорошем настроении — играет.
+        if self.play.playing():
+            nxt = self.play.next_step()
+            if nxt and self.catalog.has(nxt):
+                self.wm.hold('play', self.play.current_game['name'], salience=1.0)
+                self.cortex.act(nxt)
+                return True
+            finished = self.play.finish()
+            if finished:
+                self.feelings.feel('радость', 0.6, f'поиграл: {finished}')
+                self.neuromod.on_success()
+            return False
+        if (self.play.can_play(self.drives, self.feelings, in_danger)
+                and random.random() < 0.25 * self.development.playfulness()
+                * self.temperament.novelty_seeking()):
+            name = self.play.imagine(self.self_model.inventory)
+            print(f"🎲 Затея: {name}")
+            self.episodic.remember(f"играю: {name}", 'play', feeling='радость',
+                                   result='play', valence=0.7, importance=0.5)
+            nxt = self.play.next_step()
+            if nxt and self.catalog.has(nxt):
+                self.cortex.act(nxt)
+                return True
+
+        # 3. ПРИВЫЧКА. В знакомой ситуации — знакомое действие (на автомате).
+        cue = self.habits.cue_of(self.drives, state)
+        self._habit_cue = cue
+        if not in_danger and f.intensity < 0.6:
+            habit = self.habits.suggest(cue)
+            if habit and self.catalog.has(habit) and random.random() < 0.35:
+                self.cortex.act(habit)
+                return True
+
+        return False
+
     # ============ АВТОНОМНОЕ ПОВЕДЕНИЕ ============
 
     def _autonomous_step(self, state):
@@ -561,6 +807,8 @@ class Brain:
 
         tension = self.drives.tension()
         still_for = time.time() - self.last_pos_change_time
+        near_hostile = state.get('nearest_hostile')
+        in_danger = bool(near_hostile and near_hostile.get('distance', 999) < 8)
 
         # Паника только если мы ПЫТАЛИСЬ двигаться и не смогли. Стоять
         # неподвижно во время боя, копки, еды или сна — это нормально,
@@ -602,6 +850,11 @@ class Brain:
                 self.cortex.act('go_to_player')
             else:
                 self.cortex.act('step_forward')
+            return True
+
+        # 0c. МЕТАПОЗНАНИЕ важнее любого дела: если залип или перестал
+        # понимать — сперва сменю подход, а не буду упорствовать.
+        if self._meta_step(state, in_danger=in_danger):
             return True
 
         # 1. Есть план?
@@ -665,6 +918,11 @@ class Brain:
             self.cortex.act(action, params=params)
             return True
 
+        # 3b. Живое поведение в свободную минуту: вопрос, игра, привычка.
+        # Это не перебивает дело — этим существо занято, когда больше нечем.
+        if self._play_and_habits(state, in_danger=in_danger):
+            return True
+
         # 4. Обычный выбор (мысленная примерка + уверенность)
         # Запрещаем копать под собой, пока не убедились, что мы не в яме.
         forbid = {'dig_down', 'dig_nearby'} if self.self_dig_guard > 0 else set()
@@ -711,6 +969,85 @@ class Brain:
         self.memory.save()
         self.concepts.save()
         self.causes.save()
+        # Человеческие системы тоже сохраняются во сне.
+        self.feelings.save()
+        self.social.save()
+        self.habits.save()
+        self.meta.save()
+        self.language.save()
+        self.development.save()
+        self.temperament.save()
+        self.play.save()
+
+    # ============ ЧУВСТВА (человеческое ядро) ============
+
+    def _feel(self, state, is_new):
+        """Прожить шаг как живое существо: тело → чувство → настроение.
+
+        Порядок как у человека: сперва телесное ощущение (интероцепция),
+        затем оценка происходящего (appraisal) рождает эмоцию, а эмоция
+        складывается в медленное настроение. Это окрашивает всё решение.
+        """
+        # 1. Телесное ощущение себя.
+        body = {'in_water': state.get('in_water'), 'in_lava': state.get('in_lava'),
+                'on_fire': state.get('on_fire')}
+        self.intero.sense(state, self.drives, body)
+
+        # 2. Чувство рождается из СОБЫТИЯ, а не из каждого тика. Фон (голод,
+        # тревога) — это настроение; а вспышка чувства бывает, когда что-то
+        # ПРОИЗОШЛО: пришёл папа, стало ново, впервые заметил боль или угрозу.
+        p = state.get('player')
+        near = bool(p and p.get('distance', 999) < 8)
+        if near and not self.social.greeted_this_reunion:
+            joy = self.social.on_reunion()
+            self.feelings.feel('радость', joy, 'папа вернулся')
+            self.social.greeted_this_reunion = True
+        elif not near:
+            self.social.greeted_this_reunion = False
+
+        if is_new:
+            emo = self.feelings.appraise({'novelty': 0.7, 'control': 0.6})
+            if emo:
+                self.feelings.feel(emo.name, emo.intensity, emo.cause)
+
+        # Порог перехода: впервые замечаю боль/страх/голод/одиночество/усталость.
+        self._notice_feeling()
+
+        # 3. Настроение течёт во времени (медленный фон).
+        self.feelings.tick(self.drives, self.intero, self.neuromod)
+
+        # 4. Привязанность и разлука — отдельное, социальное чувство.
+        distress = self.social.update(state)
+        if (self.social.needs_contact() and random.random() < 0.3
+                and min(0.9, 0.4 + distress) > self.feelings.current.intensity):
+            self.feelings.feel('одиночество', min(0.9, 0.4 + distress), 'папы давно нет')
+
+        # 5. Возраст: существо взрослеет от прожитого.
+        self.development.live(steps=1.0)
+
+        return self.feelings.current
+
+    def _notice_feeling(self):
+        """Почувствовать, когда состояние ПЕРЕШЛО порог (а не пока оно длится).
+
+        Так чувство вспыхивает один раз на событие: впервые стало больно, впервые
+        сильно голоден, впервые одиноко. Пока состояние длится, оно живёт в
+        настроении и телесном тоне, а не кричит чувством каждый шаг.
+        """
+        d = self.drives.to_dict()
+        checks = [
+            ('боль', d['pain'] > 0.55, 0.9, 'мне больно'),
+            ('страх', d['fear'] > 0.6, 0.8, 'мне страшно'),
+            ('голод', d['hunger'] > 0.75, 0.6, 'я очень голоден'),
+            ('одиночество', d['loneliness'] > 0.7, 0.5, 'мне одиноко'),
+            ('усталость', d['fatigue'] > 0.8, 0.5, 'я очень устал'),
+        ]
+        for name, active, intensity, cause in checks:
+            if active and name not in self._felt_states:
+                self._felt_states.add(name)
+                self.feelings.feel(name, intensity, cause)
+            elif not active:
+                self._felt_states.discard(name)
 
     # ============ СТУПОР ============
 
@@ -773,6 +1110,8 @@ class Brain:
         self.cortex.observe()
         # Понятия о мире: сравнить «было → стало» после прошлого действия.
         self._observe_concepts(state)
+        # Чувства: тело → эмоция → настроение. Окрашивает всё решение.
+        self._feel(state, is_new)
         self._check_messages(state)
 
         p = state.get('player')
@@ -787,6 +1126,8 @@ class Brain:
             self.memory.mark_danger(cell)
             self.neuromod.on_danger()
             self.neuromod.on_pain()
+            self.feelings.feel('боль', 0.9, 'мне сделали больно')
+            self.feelings.feel('страх', 0.7, 'чуть не погиб')
             self.episodic.remember("мне было больно", "получил урон",
                                    feeling='боль', result='danger',
                                    valence=-0.8, importance=1.0)
@@ -835,13 +1176,15 @@ class Brain:
         # ВНУТРЕННЯЯ РЕЧЬ (с учётом внимания, рабочей памяти, эмоции, автобиографии)
         drives_dict = self.drives.to_dict()
         last_event = f"делал {self.cortex.pending_action}" if self.cortex.pending_action else ""
+        feeling_str = f"{self.feelings.current.name} ({self.feelings.current.cause})"
         thought = self.cognition.think_if_time(
             drives_dict, last_event, self.neuromod.mood(),
             self.goals.current.action if self.goals.current else None,
             attention=self.workspace.focus_text(),
             working_memory=str(self.wm.contents()),
-            emotion=self.neuromod.emotion,
+            emotion=feeling_str,
             self_narrative=self.self_model.narrative_summary(),
+            body=self.intero.describe(),
         )
         if thought:
             print(f"💭 {thought}")

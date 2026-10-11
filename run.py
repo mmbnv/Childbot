@@ -29,7 +29,7 @@ def build_adapter(use_mock):
 def main():
     use_mock = '--mock' in sys.argv
     print("=" * 50)
-    print("ЖИВОЕ СУЩЕСТВО v20: ОЩУЩЕНИЕ → ВНИМАНИЕ → ДЕЙСТВИЕ")
+    print("ЖИВОЕ СУЩЕСТВО v21: ТЕЛО → ЧУВСТВО → МЫСЛЬ → ПОСТУПОК")
     print("=" * 50)
 
     adapter = build_adapter(use_mock)
@@ -47,6 +47,14 @@ def main():
     print("🌍 Понятия о мире:", brain.concepts.summary())
     print("🧠 Причины и следствия:", brain.causes.summary())
     print("🎯 Задачи игры:", brain.tasks.summary())
+    print("🧬 Характер:", brain.temperament.summary())
+    print("🫀", brain.intero.summary())
+    print("❤️  Чувства:", brain.feelings.summary())
+    print("🤝", brain.social.summary())
+    print("🎲 Игра:", brain.play.summary())
+    print("🗣️  Язык:", brain.language.summary())
+    print("🪞 Метапознание:", brain.meta.summary())
+    print("🌱 Рост:", brain.development.summary())
 
     save_counter = 0
     max_steps = None
@@ -79,6 +87,14 @@ def main():
             brain.self_model.save()
             brain.curriculum.save()
             brain.concepts.save()
+            brain.feelings.save()
+            brain.social.save()
+            brain.habits.save()
+            brain.meta.save()
+            brain.language.save()
+            brain.development.save()
+            brain.play.save()
+            brain.temperament.save()
             save_counter = 0
 
         if brain.step % 20 == 0:
@@ -101,6 +117,11 @@ def main():
                 f"доф {n.dopamine:.2f} сер {n.serotonin:.2f} корт {n.cortisol:.2f} | "
                 f"{n.emotion}{pi}{ei}"
             )
+            print(f"   🫀 {brain.intero.summary()}")
+            print(f"   ❤️  {brain.feelings.summary()}")
+            print(f"   🤝 {brain.social.summary()}")
+            print(f"   🌱 {brain.development.summary()} | 🎲 {brain.play.summary()}")
+            print(f"   🪞 {brain.meta.summary()} | 🧠 {brain.habits.summary()}")
             print(f"   👁  {brain.workspace.summary()}")
             print(f"   🧩 {brain.wm.summary()}")
             print(f"   🎓 {brain.curriculum.summary()} | {brain.crafting.summary()}")

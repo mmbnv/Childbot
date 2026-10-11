@@ -132,12 +132,14 @@ class InternalVoice:
         return text
 
     def think(self, drives_summary, symbolic_summary, recent_events, mood,
-              current_action, attention="", working_memory="", emotion="", self_narrative=""):
+              current_action, attention="", working_memory="", emotion="",
+              self_narrative="", body=""):
         prompt = f"""Ты — цифровой ребёнок 3-5 лет в Minecraft. Ты ДУМАЕШЬ про себя.
 Это внутренний монолог. Не обращайся к папе. Просто размышляй вслух.
 
 Я чувствую: {drives_summary}
-Моя эмоция сейчас: {emotion}
+Что ощущаю в теле: {body or 'ничего особенного'}
+Моё чувство сейчас: {emotion}
 Настроение: {mood}
 Сейчас я осознаю (внимание): {attention}
 Держу в уме: {working_memory}
@@ -215,7 +217,8 @@ class Cognition:
                     self.symbolic.note_object('door_sound', s['x'], s['y'], s['z'])
 
     def think_if_time(self, drives, recent_events, mood, current_action,
-                      attention="", working_memory="", emotion="", self_narrative=""):
+                      attention="", working_memory="", emotion="", self_narrative="",
+                      body=""):
         if not self.voice.should_think():
             return None
         drives_str = ", ".join([f"{k}: {v:.1f}" for k, v in drives.items()
@@ -224,7 +227,8 @@ class Cognition:
         return self.voice.think(drives_str, world_str, recent_events or "ничего особенного",
                                 mood, current_action or "просто существую",
                                 attention=attention, working_memory=working_memory,
-                                emotion=emotion, self_narrative=self_narrative)
+                                emotion=emotion, self_narrative=self_narrative,
+                                body=body)
 
     def plan_if_needed(self, drives, state, predictor=None):
         if not self.planner.should_plan():
