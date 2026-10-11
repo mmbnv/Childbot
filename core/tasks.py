@@ -158,12 +158,8 @@ class TaskTracker:
 
     @staticmethod
     def _count(inventory, item):
-        total = 0
-        for i in inventory or []:
-            n = i.get('name', '')
-            if n == item or item in n:
-                total += i.get('count', 0)
-        return total
+        from core.recipes import count_in
+        return count_in(inventory, item)
 
     def _has(self, inventory, item):
         return self._count(inventory, item) > 0

@@ -12,10 +12,12 @@ CraftingSkill — умение доводить вещь до готовност
 """
 import time
 
+from core.recipes import count_in, material_family
+
 
 class CraftingSkill:
     def __init__(self, recipes, curriculum, act, max_depth=12, task_failure_cb=None,
-                 reasoner=None):
+                 reasoner=None, sense=None):
         # act(action, params) — моторный выход. В мозге это cortex.act, чтобы
         # каждое ремесленное действие тоже обучало предсказание.
         self.act = act
@@ -26,6 +28,9 @@ class CraftingSkill:
         self.task_failure_cb = task_failure_cb
         # Причинно-следственный разум: разобрать, почему шаг не удался.
         self.reasoner = reasoner
+        # sense() -> свежий инвентарь из тела. Нужен, чтобы проверить, что
+        # действие действительно что-то изменило (см. _no_progress).
+        self.sense = sense
 
         self.target = None
         self.table_placed = False
@@ -38,12 +43,7 @@ class CraftingSkill:
     # ---------- ИНВЕНТАРЬ ----------
 
     def _count(self, inventory, item):
-        total = 0
-        for i in inventory:
-            n = i.get('name', '')
-            if n == item or item in n:
-                total += i.get('count', 0)
-        return total
+        return count_in(inventory, item)
 
     def _has(self, inventory, item):
         return self._count(inventory, item) > 0
@@ -137,7 +137,37 @@ class CraftingSkill:
         result = self.act(action, params=params)
         r = (result or {}).get('result', {}) if isinstance(result, dict) else {}
         self.last_result = r
+        if r.get('ok') and self._no_progress(action, params, inventory):
+            # Дело не сдвинулось, хотя тело сказало «готово»: спрашиваем
+            # «почему» и ищем другой путь, а не повторяем вслепую.
+            return self._handle_result(action, params,
+                                       {'ok': False, 'reason': 'no_progress'})
+        if r.get('ok'):
+            self.fails = 0
         return self._handle_result(action, params, r)
+
+    def _no_progress(self, action, params, inventory):
+        """Не изменился ли инвентарь после «успешного» действия.
+
+        Защита от живого тупика: тело говорит «добыл», а вещь не появилась
+        (нет нужного блока рядом, добылся не тот предмет). Без проверки
+        существо копает одно и то же бесконечно.
+
+        Инвентарь берём СВЕЖИЙ из тела (sense), иначе замерзший список
+        покажет, что ничего не изменилось, даже когда всё получилось.
+        """
+        if action not in ('gather', 'craft', 'smelt'):
+            return False
+        target = params.get('name') if params else None
+        if not target:
+            return False
+        after = inventory
+        if self.sense is not None:
+            try:
+                after = self.sense() or inventory
+            except Exception:
+                after = inventory
+        return self._count(after, target) <= self._count(inventory, target)
 
     def _do_task(self):
         """Выполнить задачу-действие от игры (дверь, соединение, поиск)."""
@@ -199,14 +229,24 @@ class CraftingSkill:
             # Эти причины лечит уже сам план ремесла (он пересчитает и добыст
             # недостающее) — не дублируем здесь.
             return False
+        if cause.key == 'no_progress':
+            # «Успех», но вещь не появилась: пробуем добыть её в другом месте
+            # или уйти и поискать. Средство — уже другой gather/шаг.
+            pass
         # Не пробовать одно и то же средство бесконечно.
         sig = (cause.key, cause.action, str(cause.params))
         if sig == getattr(self, '_last_remedy', None):
             return False
         self._last_remedy = sig
+        # Запомнить причину: пробное действие средства перезапишет исход в
+        # cortex, поэтому фиксируем её здесь — иначе причина забудется.
+        self.reasoner.explain(action, params, False, reason, before)
 
         for step_action, step_params in cause.plan:
-            if not step_action or step_action == action:
+            if not step_action:
+                continue
+            # То же действие с теми же параметрами — это не средство, а повтор.
+            if step_action == action and step_params == params:
                 continue
             print(f"🤔 Почему не вышло: {cause.text} → пробую {step_action}")
             result = self.act(step_action, params=step_params)

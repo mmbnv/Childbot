@@ -36,6 +36,20 @@ MOCK_CRAFT = {
     'bucket': {'iron_ingot': 3}, 'bow': {'stick': 3, 'string': 3},
     'arrow': {'flint': 1, 'stick': 1, 'feather': 1},
 }
+
+# Породы дерева взаимозаменяемы: как в Minecraft, рецепт привязан к породе,
+# но существо считает «дерево есть дерево» — тело подбирает подходящую породу.
+WOOD_TYPES = ['oak', 'birch']
+
+
+def _wood_variants(item):
+    for w in WOOD_TYPES:
+        if item.startswith(w + '_'):
+            suffix = item[len(w) + 1:]
+            return [item] + [o + '_' + suffix for o in WOOD_TYPES if o != w]
+    return [item]
+
+
 # Твёрдые блоки не бьются без инструмента — фундаментальный закон («инструмент»).
 MOCK_TOOL = {
     'cobblestone': 'wooden_pickaxe', 'stone': 'wooden_pickaxe',
@@ -270,18 +284,29 @@ class MockAdapter:
                 return {'ok': True, 'result': {'ok': True, 'gathered': name}}
             return {'ok': False, 'result': {'ok': False, 'reason': 'not_found'}}
 
-        # крафт: списываем ингредиенты, добавляем результат
+        # крафт: списываем ингредиенты, добавляем результат. Порода дерева
+        # подбирается по тому, что есть в руках: «дерево есть дерево».
         if action == 'craft':
             name = params.get('name')
-            need = MOCK_CRAFT.get(name)
-            if not need:
-                return {'ok': False, 'result': {'ok': False, 'reason': 'no_recipe'}}
-            if not all(self._count(k) >= v for k, v in need.items()):
+            for cand in _wood_variants(name):
+                need = MOCK_CRAFT.get(cand)
+                if not need:
+                    continue
+                consume, ok = {}, True
+                for ing, cnt in need.items():
+                    pick = self._pick(ing, cnt)
+                    if pick is None:
+                        ok = False
+                        break
+                    consume[pick] = consume.get(pick, 0) + cnt
+                if ok:
+                    for k, v in consume.items():
+                        self._add(k, -v)
+                    self._add(cand, 1)
+                    return {'ok': True, 'result': {'ok': True, 'crafted': cand}}
+            if name in MOCK_CRAFT:
                 return {'ok': False, 'result': {'ok': False, 'reason': 'no_materials'}}
-            for k, v in need.items():
-                self._add(k, -v)
-            self._add(name, 1)
-            return {'ok': True, 'result': {'ok': True, 'crafted': name}}
+            return {'ok': False, 'result': {'ok': False, 'reason': 'no_recipe'}}
 
         if action == 'place_table':
             if self._count('crafting_table') > 0:
@@ -307,6 +332,23 @@ class MockAdapter:
     # ---- инвентарь ----
     def _count(self, name):
         return self.inventory.get(name, 0)
+
+    def _pick(self, ing, cnt):
+        """Какой конкретный предмет зачесть за ингредиент (с учётом рода).
+
+        Для дерева берём ту породу, которой в руках достаточно, — чтобы
+        списать именно её, а не «виртуальное дерево».
+        """
+        if self._count(ing) >= cnt:
+            return ing
+        for w in WOOD_TYPES:
+            if ing.startswith(w + '_'):
+                suffix = ing[len(w) + 1:]
+                for other in WOOD_TYPES:
+                    cand = other + '_' + suffix
+                    if self._count(cand) >= cnt:
+                        return cand
+        return None
 
     def _add(self, name, n):
         self.inventory[name] = max(0, self.inventory.get(name, 0) + n)

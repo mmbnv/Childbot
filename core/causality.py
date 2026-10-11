@@ -60,6 +60,7 @@ CAUSE_BY_REASON = {
     'no_player':        ('no_target', 'не вижу папу'),
     'no_target':        ('no_target', 'рядом нет цели'),
     'block_gone':       ('not_found', 'блок уже исчез'),
+    'no_progress':      ('no_progress', 'говорят «готово», а вещь не появилась'),
 }
 
 # Средство по умолчанию для каждой причины: (что нужно, действие, ключ-признак)
@@ -79,6 +80,7 @@ DEFAULT_FIX = {
     'no_support':     ('опора', 'place_block', None),
     'solid':          ('проход', 'dig_forward', None),
     'no_target':      (None, 'look_around', None),
+    'no_progress':    (None, 'look_around', None),
     'unknown':        (None, 'look_around', None),
 }
 
@@ -222,7 +224,28 @@ class Reasoner:
             if missing:
                 if r.is_craft(missing):
                     return missing, 'craft', {'name': missing}
+                # Если нужно дерево, а его нет — искать ЛЮБОЕ дерево, а не
+                # только дуб: материалы одного рода взаимозаменяемы.
+                from core.recipes import material_family
+                fam = material_family(missing)
+                if fam:
+                    src = None
+                    for cand in r.sources(missing) or []:
+                        if material_family(cand) == fam:
+                            src = cand
+                            break
+                    return missing, 'gather', {'name': src or missing}
                 return missing, 'gather', {'name': missing}
+        if key == 'no_progress' and r and name:
+            # «Говорят готово, а вещи нет»: скорее всего рядом нечего взять.
+            # Идём искать это в мире, а не повторяем вслепую. Для дерева
+            # просим ЛЮБОЕ дерево ('log'), иначе тело снова не найдёт дуб.
+            from core.recipes import material_family
+            src = (r.sources(name) or [name])[0]
+            fam = material_family(name)
+            if fam and fam in (r.sources(name) or []):
+                src = fam
+            return need, 'gather', {'name': src}
         if key == 'input' and r and name:
             rec = r.get(name) or {}
             for ing in rec.get('need', {}):
@@ -248,14 +271,11 @@ class Reasoner:
         r = self.recipes
         if not r:
             return None
+        from core.recipes import count_in
         rec = r.get(item) or {}
+        inv = before.get('_inventory', [])
         for ing, cnt in rec.get('need', {}).items():
-            have = 0
-            for i in before.get('_inventory', []):
-                n = i.get('name', '')
-                if n == ing or ing in n:
-                    have += i.get('count', 0)
-            if have < cnt:
+            if count_in(inv, ing) < cnt:
                 return ing
         return None
 
@@ -279,7 +299,7 @@ class Reasoner:
             plan.append(('place_block', None))           # создать опору
             plan.append(('step_back', None))             # отойти от края
         elif key == 'tool':
-            plan.append(('gather', {'name': 'oak_log'}))  # собрать материал на инструмент
+            plan.append(('gather', {'name': 'log'}))     # собрать ЛЮБОЕ дерево
             plan.append(('craft', {'name': need} if need else None))
         elif key == 'materials':
             if need:
@@ -294,6 +314,10 @@ class Reasoner:
         elif key == 'not_found':
             plan.append(('look_around', None))
             plan.append(('step_forward', None))
+        elif key == 'no_progress':
+            plan.append(('gather', fix_params))       # искать ЛЮБОЕ дерево
+            plan.append(('step_forward', None))       # уйти и поискать дальше
+            plan.append(('look_around', None))
         elif key == 'path':
             plan.append(('step_forward', None))
             plan.append(('jump_forward', None))

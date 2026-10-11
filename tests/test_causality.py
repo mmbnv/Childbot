@@ -128,4 +128,11 @@ assert res2.get('result', res2).get('ok') is True, res2
 print("integration: OK -> с киркой камень добывается")
 
 
+# --- «успех», но вещь не появилась: причина и средство ---
+c = reasoner.diagnose('gather', {'name': 'oak_log'}, 'no_progress', {})
+assert c.key == 'no_progress', c.key
+assert any(act == 'gather' for act, _ in c.plan), c.plan
+print("no_progress: OK ->", c.text, '→ план:', [a for a, _ in c.plan])
+
+
 print("\nCAUSALITY TESTS PASSED")

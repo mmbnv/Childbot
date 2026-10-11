@@ -100,9 +100,10 @@ class Brain:
         self.tasks = TaskTracker(self.recipes)
         # Причинно-следственный разум: почему не вышло и что с этим делать.
         self.causes = Reasoner(recipes=self.recipes)
-        self.crafting = CraftingSkill(self.recipes, self.curriculum, self.cortex.act,
-                                      task_failure_cb=self.tasks.note_failure,
-                                      reasoner=self.causes)
+        self.crafting = CraftingSkill(
+            self.recipes, self.curriculum, self.cortex.act,
+            task_failure_cb=self.tasks.note_failure, reasoner=self.causes,
+            sense=self._sense_inventory)
         # Понятия и причины подсказывают выбор действия (что ценно, что запрещено).
         self.cortex.advisor = self._advise
         self._last_features = None
@@ -527,6 +528,14 @@ class Brain:
             self.adapter.say(thought)
 
     # ============ ЗАДАЧИ ИГРЫ ============
+
+    def _sense_inventory(self):
+        """Свежий инвентарь из тела — проверить, что действие сдвинуло дело."""
+        try:
+            self.self_model.refresh(force=True)
+        except Exception:
+            pass
+        return self.self_model.inventory
 
     def _game_task_goal(self, state):
         """Взять у игры задачу и превратить её в цель для ремесла."""

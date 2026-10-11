@@ -61,7 +61,11 @@ print("curriculum: OK ->", c.summary(), c.done)
 a = MockAdapter()
 rec = Recipes(file=tempfile.mktemp(suffix='.json'))
 cur = Curriculum(rec, file=tempfile.mktemp(suffix='.json'))
-sk = CraftingSkill(rec, cur, a.action, max_depth=12)
+def sense():
+    return a.get_self()['inventory']
+
+
+sk = CraftingSkill(rec, cur, a.action, max_depth=12, sense=sense)
 
 for i in range(900):
     inv = a.get_self()['inventory']
@@ -86,6 +90,75 @@ inv = [{'name': 'iron_pickaxe', 'count': 1}]
 goal = cur.next_goal(inv)
 assert goal is not None and goal['id'].startswith('keep_'), goal
 print("endless upkeep: OK ->", goal['name'])
+
+
+# --- взаимозаменяемость: любое дерево — дерево ---
+from core.recipes import count_in, material_family, has_tool
+
+assert material_family('birch_log') == material_family('oak_log') == 'log'
+assert material_family('birch_planks') == 'planks'
+assert count_in([{'name': 'birch_log', 'count': 5}], 'oak_log') == 5
+assert has_tool([{'name': 'iron_pickaxe', 'count': 1}], 'wooden_pickaxe')
+assert not has_tool([{'name': 'wooden_pickaxe', 'count': 1}], 'iron_pickaxe')
+print("family: OK -> берёза засчитывается как дуб, железная кирка вместо деревянной")
+
+
+# --- регрессия живого тупика: тело отвечает ok, но вещь не появляется ---
+class StuckBody(MockAdapter):
+    """Тело врёт «добыл», а инвентарь не меняется (нет нужного блока рядом)."""
+
+    def __init__(self):
+        super().__init__()
+        self.inventory = {'dirt': 10, 'stick': 1}
+        self.gathers = 0
+
+    def action(self, action, params=None):
+        if action == 'gather':
+            self.gathers += 1
+            return {'ok': True, 'result': {'ok': True, 'gathered': 'oak_log'}}
+        return super().action(action, params)
+
+
+stuck = StuckBody()
+rec2 = Recipes(file=tempfile.mktemp(suffix='.json'))
+cur2 = Curriculum(rec2, file=tempfile.mktemp(suffix='.json'))
+sk2 = CraftingSkill(rec2, cur2, stuck.action, max_depth=12,
+                    sense=lambda: stuck.get_self()['inventory'])
+for i in range(60):
+    sk2.tick(stuck.get_self()['inventory'])
+# без проверки прогресса он бы копал бесконечно; теперь цикл прекращается
+assert stuck.gathers <= 12, stuck.gathers
+print("no-progress guard: OK -> перестал долбить одно и то же (", stuck.gathers, "попыток)")
+
+
+# --- берёзовый мир: дуба нет, а прогресс всё равно идёт ---
+class BirchBody(MockAdapter):
+    def __init__(self):
+        super().__init__()
+        self.inventory = {'birch_log': 40, 'dirt': 10}
+
+    def action(self, action, params=None):
+        params = params or {}
+        if action == 'gather':
+            name = params.get('name') or (params.get('from') or ['oak_log'])[0]
+            if name in ('oak_log', 'log', 'birch_log'):
+                self._add('birch_log', 1)
+                return {'ok': True, 'result': {'ok': True, 'gathered': 'birch_log'}}
+        return super().action(action, params)
+
+
+birch = BirchBody()
+rec3 = Recipes(file=tempfile.mktemp(suffix='.json'))
+cur3 = Curriculum(rec3, file=tempfile.mktemp(suffix='.json'))
+sk3 = CraftingSkill(rec3, cur3, birch.action, max_depth=12,
+                    sense=lambda: birch.get_self()['inventory'])
+for i in range(400):
+    sk3.tick(birch.get_self()['inventory'])
+    if cur3.all_done():
+        break
+assert cur3.progress().split('/')[0] != '0', cur3.progress()
+assert birch.inventory.get('wooden_pickaxe', 0) >= 1, birch.inventory
+print("birch world: OK -> прогресс без дуба:", cur3.progress())
 
 
 print("\nCRAFTING/CURRICULUM TESTS PASSED")

@@ -748,31 +748,57 @@ async function gatherFromAnimal(animalName) {
   } catch (e) { return { ok: false, reason: e.message }; }
 }
 
+// Породы дерева: материалы одного рода взаимозаменяемы. Если мозг просит
+// дубовые доски, а в руках берёза — делаем берёзовые (в Minecraft рецепт
+// привязан к породе, но для существа «дерево есть дерево»).
+const WOOD_TYPES = ['oak', 'spruce', 'birch', 'jungle', 'acacia', 'dark_oak',
+                    'mangrove', 'cherry', 'bamboo', 'crimson', 'warped'];
+
+function woodVariants(itemName) {
+  for (const w of WOOD_TYPES) {
+    if (itemName.startsWith(w + '_')) {
+      const suffix = itemName.slice(w.length + 1);
+      const held = bot.inventory.items().map(i => i.name);
+      const out = [itemName];
+      for (const other of WOOD_TYPES) {
+        if (other !== w && (held.includes(other + '_log') || held.includes(other + '_planks'))) {
+          out.push(other + '_' + suffix);
+        }
+      }
+      return out;
+    }
+  }
+  return [itemName];
+}
+
 // Скрафтить предмет. Сначала пробуем в инвентаре, потом на верстаке.
 async function craftItem(itemName, count = 1) {
   const mc = mcData();
   if (!mc) return { ok: false, reason: 'no_minecraft_data' };
-  const item = mc.itemsByName[itemName];
-  if (!item) return { ok: false, reason: 'unknown_item', item: itemName };
-
-  let recipes = bot.recipesFor(item.id, null, 1, null);
-  if (recipes && recipes.length) {
-    try { await bot.craft(recipes[0], count, null); return { ok: true, crafted: itemName }; }
-    catch (e) { return { ok: false, reason: e.message }; }
-  }
-
   const tableBlock = mc.blocksByName['crafting_table'];
   const table = tableBlock
     ? bot.findBlock({ matching: tableBlock.id, maxDistance: 6 })
     : null;
-  if (table) {
-    recipes = bot.recipesFor(item.id, null, 1, table);
+
+  for (const name of woodVariants(itemName)) {
+    const item = mc.itemsByName[name];
+    if (!item) continue;
+
+    let recipes = bot.recipesFor(item.id, null, 1, null);
     if (recipes && recipes.length) {
-      try {
-        await smoothLookAt(table.position.x + 0.5, table.position.y + 0.5, table.position.z + 0.5, 3);
-        await bot.craft(recipes[0], count, table);
-        return { ok: true, crafted: itemName, at_table: true };
-      } catch (e) { return { ok: false, reason: e.message }; }
+      try { await bot.craft(recipes[0], count, null); return { ok: true, crafted: name }; }
+      catch (e) { /* пробуем вариант на верстаке / другую породу */ }
+    }
+
+    if (table) {
+      recipes = bot.recipesFor(item.id, null, 1, table);
+      if (recipes && recipes.length) {
+        try {
+          await smoothLookAt(table.position.x + 0.5, table.position.y + 0.5, table.position.z + 0.5, 3);
+          await bot.craft(recipes[0], count, table);
+          return { ok: true, crafted: name, at_table: true };
+        } catch (e) { /* следующий вариант */ }
+      }
     }
   }
   return { ok: false, reason: 'no_recipe_or_materials', item: itemName };

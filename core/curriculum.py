@@ -141,12 +141,8 @@ class Curriculum:
 
     @staticmethod
     def _count(inventory, item):
-        total = 0
-        for i in inventory:
-            n = i.get('name', '')
-            if n == item or item in n:
-                total += i.get('count', 0)
-        return total
+        from core.recipes import count_in
+        return count_in(inventory, item)
 
     def ids(self):
         return {s[0] for s in self.steps}
@@ -168,11 +164,7 @@ class Curriculum:
 
     @staticmethod
     def _has(inventory, item):
-        for i in inventory:
-            n = i.get('name', '')
-            if n == item or item in n:
-                return True
-        return False
+        return Curriculum._count(inventory, item) > 0
 
     def summary(self):
         if self.all_done():

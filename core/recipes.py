@@ -16,6 +16,57 @@ import os
 RECIPES_FILE = "data/recipes.json"
 
 
+# Материалы одного рода взаимозаменяемы: любое дерево — дерево. Так же, как
+# человек не различает «берёзовое» и «дубовое» бревно, когда делает палки.
+# Семейство определяется окончанием имени, а не конкретным блоком — поэтому
+# правило работает в любой игре (в мире могут быть свои породы дерева).
+def material_family(item):
+    if not item:
+        return None
+    for kind in ('log', 'planks'):
+        if item == kind or item.endswith('_' + kind):
+            return kind
+    return None
+
+
+# Порядочность инструментов: лучший инструмент годится вместо худшего.
+_TOOL_TIERS = ['wooden', 'stone', 'iron', 'diamond', 'netherite']
+
+
+def has_tool(inventory, tool):
+    """Есть ли инструмент не хуже запрошенного (железная кирка вместо деревянной)."""
+    if not tool:
+        return True
+    base = tool.split('_')[-1]          # 'pickaxe' / 'axe' / 'sword' / 'shovel'
+    need_tier = 0
+    for i, t in enumerate(_TOOL_TIERS):
+        if tool.startswith(t):
+            need_tier = i
+    for item in inventory or []:
+        n = item.get('name', '')
+        if n == tool or n.endswith('_' + base):
+            tier = -1
+            for i, t in enumerate(_TOOL_TIERS):
+                if n.startswith(t):
+                    tier = i
+            if tier >= need_tier:
+                return True
+    return False
+
+
+def count_in(inventory, item):
+    """Сколько предмета в инвентаре (с учётом взаимозаменяемости рода)."""
+    total = 0
+    fam = material_family(item)
+    for i in inventory or []:
+        n = i.get('name', '')
+        if n == item or item in n:
+            total += i.get('count', 0)
+        elif fam and material_family(n) == fam:
+            total += i.get('count', 0)
+    return total
+
+
 # item -> {'need': {ingredient: count}, 'table': bool, 'from': [blocks],
 #          'kind': 'craft' | 'gather'}
 #
@@ -214,12 +265,7 @@ class Recipes:
 
     @staticmethod
     def _count(inventory, item):
-        total = 0
-        for i in inventory:
-            n = i.get('name', '')
-            if n == item or n.endswith('_' + item) or item in n:
-                total += i.get('count', 0)
-        return total
+        return count_in(inventory, item)
 
     def summary(self):
         crafts = [k for k, v in self.data.items() if v.get('kind') == 'craft']
