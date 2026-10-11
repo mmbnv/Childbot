@@ -101,6 +101,7 @@ def main():
             brain.temperament.save()
             brain.mind.values.save()
             brain.mind.identity.save()
+            brain.prior.save()
             save_counter = 0
 
         if brain.step % 20 == 0:
@@ -133,6 +134,8 @@ def main():
             print(f"   🎓 {brain.curriculum.summary()} | {brain.crafting.summary()}")
             print(f"   🌍 {brain.concepts.summary()}")
             print(f"   🎯 {brain.tasks.summary()} | 🔬 {brain.experimenter.summary()}")
+            print(f"   🧠 {brain.brain_regions.summary()}")
+            print(f"   📊 {brain.prior.summary()} | ожидание ситуации {brain.cortex.last_prior:+.2f}")
 
         if max_steps and brain.step >= max_steps:
             print(f"✅ Достигнут лимит шагов ({max_steps})")

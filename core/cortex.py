@@ -37,7 +37,7 @@ ACTION_POOL = [
 
 class Cortex:
     def __init__(self, adapter, drives, neuromod, predictor, self_model, world_model,
-                 catalog, advisor=None):
+                 catalog, advisor=None, regions=None, prior=None, workspace=None):
         self.adapter = adapter
         self.drives = drives
         self.neuromod = neuromod
@@ -45,6 +45,14 @@ class Cortex:
         self.self_model = self_model
         self.world_model = world_model
         self.catalog = catalog
+        # Распределённый мозг (гетерогенные области, двунаправленные связи,
+        # ramp, локальный сон) и субъективный приор из прошлых выборов.
+        # Без них выбор — «одна коробка», а с ними — как в мозге: решают многие.
+        self.regions = regions
+        self.prior = prior
+        self.workspace = workspace
+        self.last_regions = None
+        self.last_prior = 0.0
         # advisor(features, action) -> (bonus, forbid): подсказка от понятий
         # о мире (гравитация, дверь, опасность...). Мозг устанавливает её после
         # создания ConceptLearner.
@@ -55,6 +63,7 @@ class Cortex:
         self.pending_context = None
         self.pending_prediction = None
         self.pending_time = 0
+        self._since_act = 0
         self.last_action = None
         self.last_params = None
         self.last_result = None
@@ -102,6 +111,14 @@ class Cortex:
         feats = self._features(state)
         scored = []
         exploration = self.neuromod.exploration()
+        # Категория ситуации — для субъективного приора (что тут обычно бывает).
+        ctx = None
+        if self.prior is not None:
+            try:
+                from core.values import context_key
+                ctx = context_key(self.drives, state)
+            except Exception:
+                ctx = None
         for a in candidates:
             relief = self.predictor.predict_relief(a, drives_now, state)
             conf = self.self_model.confidence(a)
@@ -116,7 +133,18 @@ class Cortex:
                     law_bonus = bonus
                 except Exception:
                     law_bonus = 0.0
-            scored.append((a, relief + conf * 0.1 + novelty_bonus + law_bonus + noise))
+            # Вклад распределённого мозга: голос областей за это действие.
+            region_bonus = 0.0
+            if self.regions is not None:
+                region_bonus = self.regions.vote(a, drives_now, state)
+            # Субъективный приор: ожидание из прошлых 5–6 выборов.
+            prior_bonus = 0.0
+            if self.prior is not None and ctx is not None:
+                prior_bonus = 0.2 * self.prior.predict(ctx, a)
+            scored.append((a, relief + conf * 0.1 + novelty_bonus + law_bonus
+                           + region_bonus + prior_bonus + noise))
+        if ctx is not None and self.prior is not None:
+            self.last_prior = self.prior.context_prior(ctx)
 
         scored.sort(key=lambda x: -x[1])
         top_n = min(3, len(scored))
@@ -124,7 +152,22 @@ class Cortex:
         self._recent_actions.append(chosen)
         if len(self._recent_actions) > 6:
             self._recent_actions.pop(0)
+        self.last_regions = chosen
         return chosen
+
+    def tick_regions(self, features, reward=0.0):
+        """Один такт распределённого мозга: распространение, broadcast, ramp.
+
+        Вызывается мозгом каждый шаг ДО выбора действия, чтобы области были
+        «разогреты» текущей ситуацией (и накопили свидетельства к решению).
+        """
+        if self.regions is None:
+            return None
+        b = self.regions.tick(features, reward)
+        # Победивший сигнал транслируется в глобальное рабочее пространство.
+        if self.workspace is not None and b is not None:
+            self.workspace.submit('brain', f"область {b[0]}", b[1] * 1.2)
+        return b
 
     def act(self, action, params=None):
         self.last_action = action
@@ -135,6 +178,7 @@ class Cortex:
         self.pending_prediction = self.predictor.simulate(
             action, self.pending_drives_before, self.pending_context)
         self.pending_time = time.time()
+        self._since_act = 0
 
         result = self.adapter.action(action, params=params)
         # Исход последнего действия — для обучения понятий о мире.
@@ -147,10 +191,15 @@ class Cortex:
         return result
 
     def observe(self):
-        """Сравнить ожидание и реальность, обучить предсказание (дофамин)."""
+        """Сравнить ожидание и реальность, обучить предсказание (дофамин).
+
+        Ждём ШАГ, а не настенное время: при быстром цикле 0.4 секунды не
+        проходили, и обучение молчало — существо не училось на своём поступке.
+        """
         if not self.pending_action:
             return None
-        if time.time() - self.pending_time < 0.4:
+        self._since_act += 1
+        if self._since_act < 2:
             return None
 
         drives_after = self.drives.to_dict()
@@ -180,6 +229,17 @@ class Cortex:
         delta = tension_before - tension_after
         reward = max(0.0, min(1.0, 0.5 + delta * 2))
         self.neuromod.reward(0.5, reward)
+
+        # Субъективный приор учится на исходе: «сработало ли это здесь».
+        # Окно ≈ 6 прошлых исходов (как в IBL 2025).
+        if self.prior is not None:
+            try:
+                from core.values import context_key
+                ctx = context_key(self.drives, context)
+                outcome = max(-1.0, min(1.0, delta * 2.5))
+                self.prior.observe(ctx, action, outcome)
+            except Exception:
+                pass
 
         self.pending_action = None
         self.pending_prediction = None

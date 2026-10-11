@@ -66,6 +66,10 @@ from core.language import Language
 from core.development import Development
 # --- сцепка человеческих систем: оценка, воображение, ценности, «Я» ---
 from core.mind import Mind
+# --- распределённый мозг: области, двунаправленные связи, локальный сон ---
+from core.brain_regions import BrainRegions
+# --- субъективный приор: ожидание мира из прошлых 5–6 выборов ---
+from core.prior import Prior
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
 OLLAMA_MODEL = "qwen2.5:3b"
@@ -133,6 +137,14 @@ class Brain:
         # --- ЧЕЛОВЕЧЕСКОЕ ЯДРО ---
         # Характер: рождается и остаётся собой. Чувства: тело, эмоция, настроение.
         self.temperament = Temperament()
+        # РАСПРЕДЕЛЁННЫЙ МОЗГ: решение принимают многие области сразу, а не
+        # одна «коробка». Гетерогенность областей берём из характера.
+        self.brain_regions = BrainRegions(self.temperament)
+        self.cortex.regions = self.brain_regions
+        self.cortex.workspace = self.workspace
+        # СУБЪЕКТИВНЫЙ ПРИОР: ожидание мира из прошлых 5–6 выборов (IBL 2025).
+        self.prior = Prior()
+        self.cortex.prior = self.prior
         # Нейромодуляторы стартуют от характера (у каждого своя «биохимия»).
         for mod in ('dopamine', 'serotonin', 'noradrenaline', 'acetylcholine',
                     'cortisol', 'oxytocin', 'endorphins'):
@@ -626,6 +638,29 @@ class Brain:
                 self._pending_law = None
         self._last_features = after
 
+    def _region_features(self, state):
+        """Признаки для распределённого мозга: стимул, срочность, новизна.
+
+        Опираемся на смысл (опасность, голод, новизна), а не на имена, поэтому
+        сеть областей работает в любой игре.
+        """
+        d = self.drives.to_dict()
+        threat = (state.get('nearest_hostile') or {}).get('distance', 999)
+        p = state.get('player') or {}
+        stimulus = clip01(0.5 * d.get('curiosity', 0.0)
+                          + 0.3 * (1.0 if threat < 10 else 0.0)
+                          + 0.2 * (1.0 - min(1.0, p.get('distance', 30) / 30.0)))
+        urgency = clip01(max(d.get('fear', 0.0), d.get('pain', 0.0),
+                             d.get('hunger', 0.0), d.get('fatigue', 0.0)))
+        return {'stimulus': stimulus, 'urgency': urgency,
+                'novelty': 1.0 if self.step - self._last_novel_step < 5 else 0.0}
+
+    def _last_reward(self, delta):
+        """Награда шага для распределённого мозга (0..1): стало легче?"""
+        if delta is None:
+            return 0.0
+        return clip01(0.5 + float(delta) * 2.0)
+
     def _observe_habits(self, action):
         """Привычка крепнет от успеха и слабеет от неудачи; мета — наблюдает."""
         r = self.cortex.last_result or {}
@@ -1070,6 +1105,8 @@ class Brain:
         # Сцепка человеческих систем тоже сохраняется во сне.
         self.mind.values.save()
         self.mind.identity.save()
+        # Субъективный приор — ожидания мира переживают перезапуск.
+        self.prior.save()
 
     # ============ ЧУВСТВА (человеческое ядро) ============
 
@@ -1240,7 +1277,11 @@ class Brain:
         # Тело/мир реально удовлетворяет нужды (поел, поспал, папа утешил) —
         # это ЗАМЫКАЕТ цикл «чувство → поступок → облегчение».
         self._satisfy_from_world(state)
-        self.cortex.observe()
+        delta = self.cortex.observe()
+        # Распределённый мозг: прожить такт и «разогреться» текущей ситуацией
+        # ДО выбора действия. Награда/исход — глобальный сигнал (IBL 2025).
+        self.cortex.tick_regions(self._region_features(state),
+                                 reward=self._last_reward(delta))
         # Понятия о мире: сравнить «было → стало» после прошлого действия.
         self._observe_concepts(state)
         # Чувства: тело → эмоция → настроение. Окрашивает всё решение.
