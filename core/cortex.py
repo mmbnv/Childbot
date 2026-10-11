@@ -77,11 +77,18 @@ class Cortex:
         except Exception:
             return {}
 
-    def choose_action(self, state, forbid=None):
+    def choose_action(self, state, forbid=None, avoid=None):
         drives_now = self.drives.to_dict()
         candidates = [a for a in ACTION_POOL if self.catalog.has(a)]
         if forbid:
             candidates = [a for a in candidates if a not in forbid]
+        # avoid — действия, которые сейчас бессмысленны (например, «подойти к
+        # папе», когда он и так рядом): не убираем насовсем, но не даём им
+        # залипать. Если ничего не останется — вернём их.
+        if avoid:
+            without = [a for a in candidates if a not in avoid]
+            if without:
+                candidates = without
         # Не повторяем одно и то же в третий раз подряд — иначе существо
         # зацикливается на одном движении.
         recent = self._recent_actions[-2:]

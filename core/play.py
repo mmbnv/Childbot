@@ -58,6 +58,8 @@ class Play:
         self.toy = None                # во что превратил предмет
         self.last_play = 0.0
         self.cooldown = 20.0
+        self.last_play_step = -999
+        self.cooldown_steps = 15
         self.load()
 
     def load(self):
@@ -82,12 +84,19 @@ class Play:
 
     # ============ МОЖНО ЛИ ИГРАТЬ ============
 
-    def can_play(self, drives, emotions, in_danger):
-        """Играют, когда сыт, в безопасности и в хорошем настроении."""
+    def can_play(self, drives, emotions, in_danger, step=None):
+        """Играют, когда сыт, в безопасности и в хорошем настроении.
+
+        Пауза между играми — в ШАГАХ (существо живёт шагами, а не часами),
+        иначе в быстром цикле игра «никогда не наступает».
+        """
         d = drives.to_dict()
-        return (not in_danger and d['hunger'] < 0.5 and d['pain'] < 0.4
-                and d['fear'] < 0.5 and emotions.pleasure > -0.1
-                and (time.time() - self.last_play) > self.cooldown)
+        if step is not None:
+            rested = (step - self.last_play_step) > self.cooldown_steps
+        else:
+            rested = (time.time() - self.last_play) > self.cooldown
+        return (not in_danger and d['hunger'] < 0.6 and d['pain'] < 0.4
+                and d['fear'] < 0.5 and emotions.pleasure > -0.1 and rested)
 
     # ============ ВООБРАЖЕНИЕ ============
 
@@ -122,7 +131,7 @@ class Play:
         self.current_game['i'] += 1
         return steps[i]
 
-    def finish(self):
+    def finish(self, step=None):
         """Игра закончилась — радость и «это моя любимая игра»."""
         if not self.current_game:
             return None
@@ -132,6 +141,7 @@ class Play:
             self.favorite = name
         self.current_game = None
         self.last_play = time.time()
+        self.last_play_step = step if step is not None else self.last_play_step
         self.save()
         return name
 

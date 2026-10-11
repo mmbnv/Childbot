@@ -204,10 +204,17 @@ class Emotions:
         return None
 
     def _make(self, name, intensity, cause, appraisal):
-        # Впечатлительность усиливает, настроение красит.
-        intensity = clip(intensity * self.temperament.reactivity()
-                         * (1.0 + (0.2 if self.pleasure < 0 else 0.0)))
-        return Emotion(name, intensity, cause, appraisal)
+        # Впечатлительность усиливает, настроение красит (mood-congruence):
+        # то же событие в дурном настроении ранит сильнее, а в хорошем —
+        # неприятное чувство глушится. Это человеческая черта, не «шкала».
+        intense = intensity * self.temperament.reactivity()
+        bad = name in ('страх', 'печаль', 'злость', 'обида', 'стыд', 'вина', 'отвращение')
+        if bad:
+            intense *= (1.0 + max(0.0, -self.pleasure) * 0.5)
+            intense *= (1.0 - max(0.0, self.pleasure) * 0.35)
+        else:
+            intense *= (1.0 + max(0.0, self.pleasure) * 0.3)
+        return Emotion(name, clip(intense), cause, appraisal)
 
     # ============ ПЕРЕЖИВАНИЕ ============
 

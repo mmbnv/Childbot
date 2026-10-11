@@ -18,6 +18,10 @@ def build_adapter(use_mock):
         from adapters.game2 import Game2Adapter
         print("🏰 Другая игра (подземелье) — проверяем универсальность")
         return Game2Adapter()
+    if '--home' in sys.argv:
+        from adapters.home import HomeAdapter
+        print("🏠 Дом — среда, где растёт человеческий детёныш (папа, еда, игра, ученье)")
+        return HomeAdapter()
     if use_mock:
         from adapters.mock import MockAdapter
         print("🧪 Искусственное тело (mock)")
@@ -95,6 +99,8 @@ def main():
             brain.development.save()
             brain.play.save()
             brain.temperament.save()
+            brain.mind.values.save()
+            brain.mind.identity.save()
             save_counter = 0
 
         if brain.step % 20 == 0:

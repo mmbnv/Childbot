@@ -108,6 +108,20 @@ class Interoception:
             return 'спокойно'
         return 'неуютно'
 
+    def modulate(self, arousal=0.0, tone=0.0):
+        """Оценка события сдвигает само тело (сердце, дыхание, тепло).
+
+        Эмоция не «висит в воздухе»: испугался — сердце колотится; обрадовался
+        — стало тепло. Это и есть телесная сторона чувства (Джеймс-Ланге).
+        """
+        self.arousal = clip(self.arousal + arousal)
+        self.tone = clip(self.tone + tone, -1.0, 1.0)
+        # Слово телесного состояния пересчитываем по сдвинутому тону.
+        if self.tone > 0.45 and not self.signals:
+            self.feeling = 'легко и тепло'
+        elif self.tone < -0.4 and not self.signals:
+            self.feeling = 'неуютно, сжимается внутри'
+
     def describe(self):
         """Человеческое описание телесного состояния — для мысли и речи."""
         if not self.signals:

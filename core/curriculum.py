@@ -104,6 +104,29 @@ class Curriculum:
         learned = sum(1 for d in self.done if d in ids)
         return f"{learned}/{len(self.steps)}"
 
+    def observe(self, inventory):
+        """Отметить уже достигнутое, даже если сейчас делаем другое.
+
+        Прогресс должен отражать реальность: если существо добыло дерево по
+        задаче игры, ступень «добыть дерево» всё равно пройдена. Иначе
+        «программа развития» висит на нуле, хотя ребёнок давно вырос из неё.
+        """
+        changed = False
+        while not self.all_done():
+            sid, item, name, need = self.steps[self.current]
+            if self._has(inventory, item):
+                if sid not in self.done:
+                    self.done.append(sid)
+                    print(f"🎓 Научился: {name} ({item}) — {self.progress()}")
+                self.current += 1
+                self.fail_count = 0
+                changed = True
+                continue
+            break
+        if changed:
+            self.save()
+        return self.progress()
+
     def next_goal(self, inventory):
         """Какую вещь делать прямо сейчас. Возвращает dict или None.
 

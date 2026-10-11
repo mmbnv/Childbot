@@ -64,6 +64,8 @@ from core.habits import Habits
 from core.metacognition import Metacognition
 from core.language import Language
 from core.development import Development
+# --- сцепка человеческих систем: оценка, воображение, ценности, «Я» ---
+from core.mind import Mind
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
 OLLAMA_MODEL = "qwen2.5:3b"
@@ -148,6 +150,10 @@ class Brain:
         self.language = Language(self.temperament)
         self.development = Development()
 
+        # СЦЕПКА человеческих систем: оценка → воображение → ценности → «Я».
+        # Именно это делает поведение личным, а не реактивным.
+        self.mind = Mind(self)
+
         self.adaptive = AdaptiveIntent(self.catalog)
         self.intent = IntentResolver(self.adaptive, self.catalog)
         self.voice = Voice(enabled=VOICE_ENABLED)
@@ -157,6 +163,8 @@ class Brain:
         # Какие состояния уже пережиты (чтобы чувство вспыхивало на ПЕРЕХОДЕ,
         # а не каждый тик): «стало плохо» важнее, чем «плохо уже давно».
         self._felt_states = set()
+        self._last_novel_step = -99
+        self._last_scold_seen = 0
 
         self.step = 0
         self.last_positions = []
@@ -176,6 +184,7 @@ class Brain:
 
         self.sleeping = False
         self.sleep_until = 0
+        self._sleep_steps_left = 0
 
         self.conversation = []
         self.last_user_msg_time = 0
@@ -608,6 +617,9 @@ class Brain:
             self._observe_cause(action, after)
             # Привычки и метапознание учатся на исходе действия.
             self._observe_habits(action)
+            # Ценности и «Я» учатся на поступке: подкрепление, диссонанс, совесть.
+            self.mind.after_action(action, bool((self.cortex.last_result or {}).get('ok', True)),
+                                   state)
             if self._pending_law:
                 self.experimenter.observe(
                     self._pending_law, self.concepts.confidence(self._pending_law) > 0.5)
@@ -675,6 +687,38 @@ class Brain:
 
     # ============ ЧЕЛОВЕЧЕСКОЕ ПОВЕДЕНИЕ ============
 
+    def _infant_reflex(self, state):
+        """Базовые рефлексы нужды: очень голоден или одинок — позвать папу.
+
+        У младенца ещё нет планов и ремесла — есть плач и тяга к взрослому.
+        У ребёнка постарше то же самое, когда совсем прижало: сначала утолить
+        нужду, потом всё остальное. Это гарантирует, что петля «чувство →
+        поступок → облегчение» всегда замыкается, а не застревает на 1.0.
+        """
+        d = self.drives.to_dict()
+        p = state.get('player')
+        near = bool(p and p.get('distance', 999) < 8)
+        infant = self.development.stage == 0
+        # Голод: младенец зовёт рано, старший — только когда совсем прижало.
+        hunger_line = 0.7 if infant else 0.85
+        if d['hunger'] > hunger_line:
+            for a in ('ask_food', 'eat_food', 'cry', 'find_and_attack'):
+                if self.catalog.has(a):
+                    if a == 'cry':
+                        self.feelings.feel('печаль', 0.6, 'голодно, зову папу')
+                    self.cortex.act(a)
+                    return True
+        # Одиночество: сильно одиноко и папы нет → заплакать, позвать, пойти.
+        lonely_line = 0.65 if infant else 0.85
+        if d['loneliness'] > lonely_line and not near:
+            for a in ('cry', 'go_to_player'):
+                if self.catalog.has(a):
+                    if a == 'cry':
+                        self.feelings.feel('одиночество', 0.7, 'папы нет, я зову')
+                    self.cortex.act(a)
+                    return True
+        return False
+
     def _meta_step(self, state, in_danger):
         """Метапознание: заметить залипание и сменить подход, а не упорствовать.
 
@@ -715,11 +759,22 @@ class Brain:
         if not (f.name in ('страх', 'печаль', 'злость', 'обида', 'стыд', 'одиночество')
                 and f.intensity > 0.55):
             return False
+        # Успокаиваемся не каждый шаг: справиться с чувством — это процесс,
+        # а не мгновенная команда. Иначе ребёнок «залипает» на утешении.
+        if self.step - getattr(self, '_last_regulate_step', -99) < 8:
+            return False
+        self._last_regulate_step = self.step
 
         if papa_near and self.social.bond > 0.2:
             if self.feelings.regulate('comfort', self.drives, self.neuromod,
                                       attachment_near=True):
-                self.cortex.act('come_close_to_player')
+                # Подойти, только если ещё не рядом (иначе — просто утешение).
+                if p.get('distance', 999) > 4 and self.catalog.has('come_close_to_player'):
+                    self.cortex.act('come_close_to_player')
+                elif self.catalog.has('look_at_player'):
+                    self.cortex.act('look_at_player')
+                else:
+                    self.cortex.act('step_forward')
                 self.wm.hold('feeling', 'папа утешил', salience=1.3)
                 return True
         if f.name in ('страх', 'печаль') and self.meta.confidence > 0.4:
@@ -760,13 +815,13 @@ class Brain:
                 self.wm.hold('play', self.play.current_game['name'], salience=1.0)
                 self.cortex.act(nxt)
                 return True
-            finished = self.play.finish()
+            finished = self.play.finish(step=self.step)
             if finished:
                 self.feelings.feel('радость', 0.6, f'поиграл: {finished}')
                 self.neuromod.on_success()
             return False
-        if (self.play.can_play(self.drives, self.feelings, in_danger)
-                and random.random() < 0.25 * self.development.playfulness()
+        if (self.play.can_play(self.drives, self.feelings, in_danger, step=self.step)
+                and random.random() < 0.35 * self.development.playfulness()
                 * self.temperament.novelty_seeking()):
             name = self.play.imagine(self.self_model.inventory)
             print(f"🎲 Затея: {name}")
@@ -852,6 +907,10 @@ class Brain:
                 self.cortex.act('step_forward')
             return True
 
+        # 0b-bis. МЛАДЕНЧЕСКИЙ РЕФЛЕКС: очень голоден/одинок — зову папу.
+        if self._infant_reflex(state):
+            return True
+
         # 0c. МЕТАПОЗНАНИЕ важнее любого дела: если залип или перестал
         # понимать — сперва сменю подход, а не буду упорствовать.
         if self._meta_step(state, in_danger=in_danger):
@@ -910,7 +969,17 @@ class Brain:
                 self._execute_plan()
                 return True
 
-        # 3. Спонтанные желания
+        # 3. ПРЕДВИДЕНИЕ: позаботиться о нужде ЗАРАНЕЕ (пока она невелика).
+        # Это то, что отличает существо с воображением от реактивного робота.
+        ahead = self.mind.think_ahead(state)
+        if ahead:
+            action, why = ahead
+            print(f"🔮 Предвижу: {why} → {action}")
+            self.wm.hold('intention', why, salience=1.1)
+            self.cortex.act(action)
+            return True
+
+        # 3b. Спонтанные желания
         goal_tuple = self.autonomy.generate_goal(self.drives, self.neuromod, state, self.self_model)
         if goal_tuple:
             name, action, params = goal_tuple
@@ -918,20 +987,37 @@ class Brain:
             self.cortex.act(action, params=params)
             return True
 
-        # 3b. Живое поведение в свободную минуту: вопрос, игра, привычка.
+        # 3c. Живое поведение в свободную минуту: утешение, вопрос, игра.
         # Это не перебивает дело — этим существо занято, когда больше нечем.
         if self._play_and_habits(state, in_danger=in_danger):
             return True
 
-        # 4. Обычный выбор (мысленная примерка + уверенность)
-        # Запрещаем копать под собой, пока не убедились, что мы не в яме.
+        # 4. РЕШЕНИЕ: арбитраж двух систем — привычка (быстро) против
+        # обдумывания (мысленная примерка + ценности). Как у человека.
         forbid = {'dig_down', 'dig_nearby'} if self.self_dig_guard > 0 else set()
         if self.self_dig_guard > 0:
             self.self_dig_guard -= 1
-        action = self.cortex.choose_action(state, forbid=forbid)
+        habit_action = None
+        cue = self.habits.cue_of(self.drives, state)
+        if not in_danger and self.feelings.current.intensity < 0.6:
+            habit_action = self.habits.suggest(cue)
+        # Если папа и так вплотную — «подойти к папе» бессмысленно и залипает.
+        p = state.get('player')
+        avoid = set()
+        if p and p.get('distance', 999) < 4:
+            avoid = {'come_close_to_player', 'go_to_player'}
+        action, source, conflict = self.mind.decide(
+            state, in_danger, habit_action=habit_action, avoid=avoid)
+        if action in avoid:
+            action = self.cortex.choose_action(state, avoid=avoid)
+            source = 'deliberate'
+        if action in forbid:
+            action = self.cortex.choose_action(state, forbid=forbid, avoid=avoid)
+            source = 'deliberate'
         if self.step % 5 == 0:
             dominant = self.drives.dominant()
-            print(f"🧠 Напряжение {tension:.2f} (главное: {dominant}) → {action}")
+            print(f"🧠 Напряжение {tension:.2f} (главное: {dominant}) "
+                  f"→ {action} [{source}]")
         self.cortex.act(action)
         return True
 
@@ -941,16 +1027,19 @@ class Brain:
         """Сон: консолидация опыта (гиппокампальный повтор) и очистка памяти."""
         d = self.drives.to_dict()
         night = state.get('is_night', False)
+        # Сон измеряется ШАГАМИ, а не настенным временем: существо живёт
+        # шагами. Иначе при быстром цикле оно «спит вечно» (часы не идут).
         if self.sleeping:
-            if time.time() < self.sleep_until:
-                self.cortex.act('wait_1sec')
+            self._sleep_steps_left -= 1
+            if self._sleep_steps_left > 0:
+                self.cortex.act('nap' if self.catalog.has('nap') else 'wait_1sec')
                 return True
             self.sleeping = False
             return False
         if d['fatigue'] > 0.85 or (night and d['fatigue'] > 0.65):
             print("😴 Засыпаю...")
             self.sleeping = True
-            self.sleep_until = time.time() + 8
+            self._sleep_steps_left = 8
             self.drives.meet_sleep(0.6)
             self._consolidate()
             return True
@@ -978,6 +1067,9 @@ class Brain:
         self.development.save()
         self.temperament.save()
         self.play.save()
+        # Сцепка человеческих систем тоже сохраняется во сне.
+        self.mind.values.save()
+        self.mind.identity.save()
 
     # ============ ЧУВСТВА (человеческое ядро) ============
 
@@ -1002,13 +1094,20 @@ class Brain:
             joy = self.social.on_reunion()
             self.feelings.feel('радость', joy, 'папа вернулся')
             self.social.greeted_this_reunion = True
+            # Близость папы снимает одиночество и наполняет теплом.
+            self.drives.meet('loneliness', 0.35)
         elif not near:
             self.social.greeted_this_reunion = False
 
+        # 2b. ОЦЕНКА (appraisal) — сердце человеческого чувства. Мозг оценивает
+        # смысл шага и разворачивает оценку обратно в тело и химию: событие
+        # меняет и чувство, и сам организм (замкнутая петля).
+        appraisal = self.mind.feel(state, is_new, in_danger=False)
+        emo = self.feelings.appraise(appraisal.to_dict())
+        if emo and emo.intensity > self.feelings.current.intensity + 0.03:
+            self.feelings.feel(emo.name, emo.intensity, emo.cause)
         if is_new:
-            emo = self.feelings.appraise({'novelty': 0.7, 'control': 0.6})
-            if emo:
-                self.feelings.feel(emo.name, emo.intensity, emo.cause)
+            self.mind.note_novelty(self.step)
 
         # Порог перехода: впервые замечаю боль/страх/голод/одиночество/усталость.
         self._notice_feeling()
@@ -1026,6 +1125,34 @@ class Brain:
         self.development.live(steps=1.0)
 
         return self.feelings.current
+
+    def _satisfy_from_world(self, state):
+        """Тело и мир удовлетворяют нужды — снять драйвы по факту.
+
+        Как у живого: поел — голод падает; поспал — усталость; обнял папу —
+        одиночество. Без этого существо «чувствует голод вечно» и выглядит
+        роботом с вечным датчиком. Опираемся на РЕАЛЬНЫЕ сигналы тела
+        (food, energy/сон), а не на «само пройдёт».
+        """
+        food = state.get('food')
+        if food is not None:
+            # Сытость тела прямо снимает давление голода (поел — наелся).
+            satiety = clip01((food - 10) / 10.0)   # 0 при food<=10, 1 при food>=20
+            if satiety > 0:
+                self.drives.meet('hunger', 0.15 * satiety)
+
+        # Сон: если тело сообщает запас сил (energy) — усталость падает.
+        energy = state.get('energy')
+        if energy is not None:
+            rested = clip01((energy - 10) / 10.0)
+            if rested > 0:
+                self.drives.meet('fatigue', 0.06 * rested)
+
+        # Папа вплотную — одиночество тает (объятие).
+        p = state.get('player')
+        if p and p.get('distance', 999) < 4:
+            self.drives.meet('loneliness', 0.12)
+            self.neuromod.oxytocin = clip01(self.neuromod.oxytocin + 0.05)
 
     def _notice_feeling(self):
         """Почувствовать, когда состояние ПЕРЕШЛО порог (а не пока оно длится).
@@ -1095,6 +1222,9 @@ class Brain:
         if self.step % 5 == 0:
             self.self_model.refresh()
             self.world_model.refresh()
+            # Развитие отмечается по факту: что бы существо ни делало,
+            # достигнутая ступень (дерево, доски, кирка) засчитывается.
+            self.curriculum.observe(self.self_model.inventory)
 
         if self.step % 10 == 0:
             try:
@@ -1107,6 +1237,9 @@ class Brain:
         cell = self.cell_of(state)
         is_new = self.memory.add_cell(cell)
         self.drives.tick(state, is_new)
+        # Тело/мир реально удовлетворяет нужды (поел, поспал, папа утешил) —
+        # это ЗАМЫКАЕТ цикл «чувство → поступок → облегчение».
+        self._satisfy_from_world(state)
         self.cortex.observe()
         # Понятия о мире: сравнить «было → стало» после прошлого действия.
         self._observe_concepts(state)

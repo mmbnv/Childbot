@@ -16,6 +16,7 @@ MODULES = [
     'tests.test_concepts',
     'tests.test_causality',
     'tests.test_mind',
+    'tests.test_mind_systems',
     'tests.test_games',
 ]
 
