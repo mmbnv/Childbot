@@ -51,6 +51,10 @@ class Cortex:
         self.regions = regions
         self.prior = prior
         self.workspace = workspace
+        # ВРОЖДЁННЫЙ ИНСТИНКТ: отклик fly-brain (коннектом FAFB) на ситуацию.
+        # Это «нутром чую» — быстрый необучаемый слой, дополняющий выученное.
+        self.instinct = None
+        self.last_instinct = None
         self.last_regions = None
         self.last_prior = 0.0
         # advisor(features, action) -> (bonus, forbid): подсказка от понятий
@@ -141,8 +145,12 @@ class Cortex:
             prior_bonus = 0.0
             if self.prior is not None and ctx is not None:
                 prior_bonus = 0.2 * self.prior.predict(ctx, a)
+            # ВРОЖДЁННЫЙ ИНСТИНКТ (fly-brain): маленький сдвиг «нутром чую».
+            instinct_bonus = 0.0
+            if self.last_instinct is not None:
+                instinct_bonus = self.last_instinct.bias_for(a)
             scored.append((a, relief + conf * 0.1 + novelty_bonus + law_bonus
-                           + region_bonus + prior_bonus + noise))
+                           + region_bonus + prior_bonus + instinct_bonus + noise))
         if ctx is not None and self.prior is not None:
             self.last_prior = self.prior.context_prior(ctx)
 
@@ -168,6 +176,25 @@ class Cortex:
         if self.workspace is not None and b is not None:
             self.workspace.submit('brain', f"область {b[0]}", b[1] * 1.2)
         return b
+
+    def tick_instinct(self, state, step):
+        """Один такт врождённого инстинкта (fly-brain) ДО выбора действия.
+
+        Инстинкт даёт знак «тянет/отвращает» на текущую ситуацию. Мы не даём
+        ему решать самому: запоминаем знак (для сдвига оценки) и, если он
+        силён, кладём его в глобальное рабочее пространство — существо
+        «осознаёт» инстинктивный порыв наравне с другими сигналами.
+        """
+        if self.instinct is None:
+            return None
+        reading = self.instinct.feel(state, self.drives, step)
+        self.last_instinct = reading
+        if reading is not None and abs(reading.valence) > 0.5:
+            urge = "тянет вперёд" if reading.valence > 0 else "хочется прочь"
+            if self.workspace is not None:
+                self.workspace.submit('instinct', f"инстинкт: {urge}",
+                                      abs(reading.valence) * 1.1)
+        return reading
 
     def act(self, action, params=None):
         self.last_action = action

@@ -4,7 +4,7 @@ install:      ## зависимости мозга
 	pip install -r requirements.txt
 
 compile:      ## проверка синтаксиса Python и JS
-	python -m py_compile core/*.py adapters/*.py run.py tests/*.py
+	python -m py_compile core/*.py adapters/*.py flybrain/*.py run.py tests/*.py
 	node --check bot.js
 
 test: compile ## все тесты мозга (без Minecraft)
@@ -20,4 +20,4 @@ brain:        ## мозг: подключение к телу на localhost:300
 	python run.py
 
 clean:        ## убрать состояние и кэш
-	rm -rf data __pycache__ core/__pycache__ adapters/__pycache__ tests/__pycache__
+	rm -rf data __pycache__ core/__pycache__ adapters/__pycache__ tests/__pycache__ flybrain/__pycache__
