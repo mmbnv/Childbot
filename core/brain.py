@@ -70,6 +70,8 @@ from core.mind import Mind
 from core.brain_regions import BrainRegions
 # --- субъективный приор: ожидание мира из прошлых 5–6 выборов ---
 from core.prior import Prior
+# --- врождённый инстинкт: модель мозга дрозофилы (коннектом FlyWire FAFB) ---
+from flybrain import FlyBrainInstinct
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
 OLLAMA_MODEL = "qwen2.5:3b"
@@ -166,6 +168,12 @@ class Brain:
         # Именно это делает поведение личным, а не реактивным.
         self.mind = Mind(self)
 
+        # ВРОЖДЁННЫЙ ИНСТИНКТ: модель мозга дрозофилы (коннектом FlyWire FAFB).
+        # Быстрый необучаемый отклик «нутром чую», дополняющий выученное решение.
+        # Необязателен: без данных/scipy тихо выключается (available == False).
+        self.instinct = FlyBrainInstinct(download=False)
+        self.cortex.instinct = self.instinct
+
         self.adaptive = AdaptiveIntent(self.catalog)
         self.intent = IntentResolver(self.adaptive, self.catalog)
         self.voice = Voice(enabled=VOICE_ENABLED)
@@ -219,6 +227,7 @@ class Brain:
         print(f"❤️  {self.feelings.summary()}")
         print(f"🤝 {self.social.summary()}")
         print(f"🌱 {self.development.summary()}")
+        print(f"🪰 {self.instinct.summary()}")
         print(self.cognition.summary())
 
     # ============ LLM ============
@@ -1282,6 +1291,9 @@ class Brain:
         # ДО выбора действия. Награда/исход — глобальный сигнал (IBL 2025).
         self.cortex.tick_regions(self._region_features(state),
                                  reward=self._last_reward(delta))
+        # ВРОЖДЁННЫЙ ИНСТИНКТ (fly-brain): быстрый отклик коннектома FAFB на
+        # ситуацию. Даёт знак «тянет/отвращает» для сдвига выбора действия.
+        self.cortex.tick_instinct(state, self.step)
         # Понятия о мире: сравнить «было → стало» после прошлого действия.
         self._observe_concepts(state)
         # Чувства: тело → эмоция → настроение. Окрашивает всё решение.

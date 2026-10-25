@@ -135,6 +135,7 @@ def main():
             print(f"   🌍 {brain.concepts.summary()}")
             print(f"   🎯 {brain.tasks.summary()} | 🔬 {brain.experimenter.summary()}")
             print(f"   🧠 {brain.brain_regions.summary()}")
+            print(f"   🪰 {brain.instinct.summary()}")
             print(f"   📊 {brain.prior.summary()} | ожидание ситуации {brain.cortex.last_prior:+.2f}")
 
         if max_steps and brain.step >= max_steps:

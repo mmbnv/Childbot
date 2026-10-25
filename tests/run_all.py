@@ -18,6 +18,7 @@ MODULES = [
     'tests.test_mind',
     'tests.test_mind_systems',
     'tests.test_brain_regions',
+    'tests.test_fly_brain',
     'tests.test_games',
 ]
 
