@@ -1,0 +1,5 @@
+# Childbot core. The local fly-brain engine needs only these.
+numpy>=1.24
+scipy>=1.11
+pandas>=2.0
+pyarrow>=14.0

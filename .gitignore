@@ -218,3 +218,13 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Childbot data
+# Large FlyWire FAFB files are downloaded, not committed (see README).
+data/*.csv
+data/*.parquet
+data/*.npz
+data/*.gz
+
+# Local runtime state
+.childbot_memory.json
